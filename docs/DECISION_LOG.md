@@ -356,37 +356,36 @@ with a comment, matching the same trade-off already made for `TaskUpdate`/`TaskS
 
 ### Contexto y Problema
 
-Caso de uso b.iii (bonus) pide asignar un usuario responsable a cada tarea. `TaskModel` no tenía
-ninguna referencia a `users`, y no existía forma de comunicar "sin asignar" de forma explícita
-frente a "no toqué este campo" en una actualización parcial.
+Use case b.iii (bonus) requires assigning a responsible user to each task. `TaskModel` had no
+reference to `users`, and there was no way to explicitly communicate "unassigned" versus "I
+didn't touch this field" in a partial update.
 
 ### Opción Elegida y Justificación
 
-Se añadió `assignee_id: Mapped[int | None]` a `TaskModel` como FK nullable a `users.id`, con
-relationship `assignee` (`lazy="selectin"`, sin `back_populates` porque `UserModel` no necesita
-navegar hacia sus tareas asignadas todavía). `TaskCreate`/`TaskUpdate` ganaron un `assignee_id`
-opcional para asignar en el mismo request de creación/edición, y se agregó `TaskAssigneeUpdate`
-(campo `assignee_id: int | None`, requerido pero nullable) más el endpoint dedicado
-`PATCH /v1/tasks/{id}/assignee`, siguiendo el mismo patrón que `TaskStatusUpdate` +
-`PATCH /tasks/{id}/status`: un campo requerido-pero-nullable obliga al caller a decir
-explícitamente "desasignar" (`null`) en vez de que una omisión ambigua se confunda con "no
-cambiar". La validación de que el usuario exista vive en `TaskService` (`_ensure_user_exists`,
-reutilizado por `create_task`, `update_task` y el nuevo `assign_task`), lanzando `UserNotFoundError`
-(nuevo, mapeado a 404 en `app/main.py`) — nunca una violación de FK sin manejar. `TaskRead` expone
-`assignee_id` como entero plano, igual que `list_id`, sin anidar un `UserRead`, por consistencia
-con el resto del esquema y para no acoplar el contrato de tareas al de usuarios.
+Added `assignee_id: Mapped[int | None]` to `TaskModel` as a nullable FK to `users.id`, with an
+`assignee` relationship (`lazy="selectin"`, no `back_populates` since `UserModel` doesn't need to
+navigate to its assigned tasks yet). `TaskCreate`/`TaskUpdate` gained an optional `assignee_id` to
+assign in the same create/edit request, and `TaskAssigneeUpdate` was added (field
+`assignee_id: int | None`, required but nullable) along with the dedicated endpoint
+`PATCH /v1/tasks/{id}/assignee`, following the same pattern as `TaskStatusUpdate` +
+`PATCH /tasks/{id}/status`: a required-but-nullable field forces the caller to explicitly say
+"unassign" (`null`) instead of an ambiguous omission being confused with "don't change".
+Validation that the user exists lives in `TaskService` (`_ensure_user_exists`, reused by
+`create_task`, `update_task`, and the new `assign_task`), raising `UserNotFoundError` (new, mapped
+to 404 in `app/main.py`) — never an unhandled FK violation. `TaskRead` exposes `assignee_id` as a
+plain integer, same as `list_id`, without nesting a `UserRead`, for consistency with the rest of
+the schema and to avoid coupling the tasks contract to the users one.
 
 ### Tradeoffs y Consecuencias
 
-- **Positivas (+):** un usuario responsable por tarea es verificable end-to-end (unit tests en
-  `TaskService` + tests de integración en `PATCH /tasks/{id}/assignee`); `assign_task` como método
-  nombrado (no un `setattr` genérico) deja espacio para reglas de negocio futuras (p. ej. notificar
-  al asignado) sin tocar `update_task`.
-- **Negativas (-):** no hay restricción de que el usuario asignado pertenezca a la misma
-  organización/lista que la tarea (el modelo no tiene ese concepto aún), así que cualquier usuario
-  registrado puede ser asignado a cualquier tarea; aceptable dado el alcance actual de la app.
-  Tampoco se agregó notificación (real o ficticia) al asignar — eso es el caso de uso b.iv,
-  fuera del alcance de este ADR.
+- **Positivas (+):** a responsible user per task is verifiable end-to-end (unit tests in
+  `TaskService` + integration tests on `PATCH /tasks/{id}/assignee`); `assign_task` as a named
+  method (not a generic `setattr`) leaves room for future business rules (e.g. notifying the
+  assignee) without touching `update_task`.
+- **Negativas (-):** there's no restriction that the assigned user belong to the same
+  organization/list as the task (the model has no such concept yet), so any registered user can
+  be assigned to any task; acceptable given the app's current scope. No notification (real or
+  fake) was added on assignment either — that's use case b.iv, out of scope for this ADR.
 
 ## ADR-012: Fake Invitation Notification (`InvitationModel`, logged-only send)
 
@@ -395,42 +394,41 @@ con el resto del esquema y para no acoplar el contrato de tareas al de usuarios.
 
 ### Contexto y Problema
 
-Caso de uso b.iv (bonus) pide simular el envío de una invitación por email a un usuario, sin
-integración real de correo. No existía ningún modelo ni endpoint para representar "se invitó a
-alguien a colaborar en algo".
+Use case b.iv (bonus) requires simulating sending an email invitation to a user, without real
+email integration. There was no model or endpoint to represent "someone was invited to
+collaborate on something".
 
 ### Opción Elegida y Justificación
 
-Se modeló la invitación como un evento inmutable ligado a una `TaskListModel` (invitar a
-colaborar en una lista, no en una tarea individual): `InvitationModel` con `list_id` (FK a
-`task_lists.id`), `email` (string libre, no necesariamente un usuario ya registrado — se puede
-invitar a alguien que aún no existe en el sistema), `invited_by_id` (FK a `users.id`, quien
-invita) y `created_at` únicamente (sin `updated_at`: una invitación no se edita, es un registro
-de que un envío ocurrió). Se persiste como fila propia (`invitations` table, relationship
-`TaskListModel.invitations` con `cascade="all, delete-orphan"`, igual que `tasks`) en vez de
-solo loguear sin guardar nada, para que el envío quede auditable y sea verificable en tests sin
-depender de capturar logs. El "envío" es completamente ficticio: `NotificationService.
-send_task_list_invitation` valida que la lista exista (`TaskListNotFoundError`, reutilizada, sin
-excepción nueva) y luego solo hace `logger.info("[FAKE EMAIL] ...")` — deliberadamente sin
-ninguna librería de email real (SMTP, SES, etc.), que es exactamente el límite de alcance que
-pide el enunciado ("no real"). El endpoint `POST /v1/task-lists/{id}/invitations` usa el mismo
-nivel de autorización (`CurrentUser`) que el resto de endpoints de mutación de `task_lists.py`
-(create/update): ninguno de ellos valida hoy que el caller sea el `owner_id` de la lista, así que
-agregar esa restricción solo aquí introduciría una inconsistencia nueva y fuera de alcance, no
-una corrección de algo roto.
+The invitation was modeled as an immutable event tied to a `TaskListModel` (inviting someone to
+collaborate on a list, not on an individual task): `InvitationModel` with `list_id` (FK to
+`task_lists.id`), `email` (free-form string, not necessarily an already-registered user — it's
+possible to invite someone who doesn't exist in the system yet), `invited_by_id` (FK to
+`users.id`, the inviter), and `created_at` only (no `updated_at`: an invitation isn't edited, it's
+a record that a send occurred). It's persisted as its own row (`invitations` table, relationship
+`TaskListModel.invitations` with `cascade="all, delete-orphan"`, same as `tasks`) rather than just
+logging without storing anything, so the send is auditable and verifiable in tests without relying
+on capturing logs. The "send" is entirely fake: `NotificationService.send_task_list_invitation`
+validates that the list exists (`TaskListNotFoundError`, reused, no new exception) and then just
+does `logger.info("[FAKE EMAIL] ...")` — deliberately without any real email library (SMTP, SES,
+etc.), which is exactly the scope boundary the spec asks for ("not real"). The
+`POST /v1/task-lists/{id}/invitations` endpoint uses the same authorization level (`CurrentUser`)
+as the rest of the mutation endpoints in `task_lists.py` (create/update): none of them currently
+validate that the caller is the list's `owner_id`, so adding that restriction only here would
+introduce a new inconsistency and be out of scope, not a fix for something broken.
 
 ### Tradeoffs y Consecuencias
 
-- **Positivas (+):** el envío fake queda probado end-to-end (unit test en `NotificationService`
-  + integración en `POST /task-lists/{id}/invitations`) verificando la fila persistida, sin
-  necesidad de mockear ninguna librería de correo real porque nunca existió una. `email` como
-  string simple (no FK a `users`) permite invitar a direcciones que todavía no tienen cuenta,
-  que es el caso de uso real de una invitación.
-- **Negativas (-):** no hay endpoint para listar o consultar invitaciones enviadas (fuera de
-  alcance de b.iv), así que hoy solo son verificables por quien las creó, vía la respuesta del
-  POST o consultando la base de datos directamente. Al no haber restricción de ownership sobre
-  quién puede invitar a una lista, cualquier usuario autenticado puede invitar a cualquier email
-  a cualquier lista existente; mismo trade-off ya aceptado en el resto de `task_lists.py`.
+- **Positivas (+):** the fake send is tested end-to-end (unit test in `NotificationService` +
+  integration test on `POST /task-lists/{id}/invitations`) verifying the persisted row, with no
+  need to mock any real email library since one never existed. `email` as a plain string (not an
+  FK to `users`) allows inviting addresses that don't have an account yet, which is the real use
+  case for an invitation.
+- **Negativas (-):** there's no endpoint to list or query sent invitations (out of scope for
+  b.iv), so today they're only verifiable by whoever created them, via the POST response or by
+  querying the database directly. Since there's no ownership restriction on who can invite to a
+  list, any authenticated user can invite any email to any existing list; the same trade-off
+  already accepted in the rest of `task_lists.py`.
 
 ## ADR-013: Invitation Uniqueness + Read-Back Listing
 
@@ -439,42 +437,39 @@ una corrección de algo roto.
 
 ### Contexto y Problema
 
-Revisión de ADR-012 encontró dos huecos: (1) nada impedía invitar el mismo email a la misma
-lista un número ilimitado de veces (sin unique constraint en `(list_id, email)`), y (2) las
-invitaciones se podían crear pero no leer de vuelta — escritura de una sola vía, sin forma de
-auditarlas vía API.
+Review of ADR-012 found two gaps: (1) nothing prevented inviting the same email to the same list
+an unlimited number of times (no unique constraint on `(list_id, email)`), and (2) invitations
+could be created but not read back — write-only, with no way to audit them via the API.
 
 ### Opción Elegida y Justificación
 
-Para (1): se agregó `UniqueConstraint("list_id", "email", name="uq_invitations_list_id_email")`
-en `InvitationModel` más la migración correspondiente, y en el servicio un chequeo explícito
-`InvitationRepository.exists_for_list_and_email` antes de insertar, que levanta
-`DuplicateInvitationError` (nueva, mapeada a 409) en vez de dejar que una violación del
-constraint de la base de datos se propague como un error genérico. El constraint de base de
-datos se mantiene como respaldo (defensa en profundidad) para el caso de una condición de
-carrera entre el chequeo y el insert — el chequeo en el servicio es lo que da un error de
-dominio limpio en el camino normal, no lo único que garantiza unicidad.
+For (1): added `UniqueConstraint("list_id", "email", name="uq_invitations_list_id_email")` on
+`InvitationModel` plus the corresponding migration, and an explicit check in the service,
+`InvitationRepository.exists_for_list_and_email`, before inserting, which raises
+`DuplicateInvitationError` (new, mapped to 409) instead of letting a database constraint
+violation propagate as a generic error. The database constraint is kept as a backstop
+(defense in depth) for the case of a race condition between the check and the insert — the
+service-level check is what produces a clean domain error on the normal path, not the only thing
+guaranteeing uniqueness.
 
-Para (2): se agregó `GET /v1/task-lists/{id}/invitations` (mismo patrón de paginación y
-autorización que `GET /{id}/tasks`), respaldado por `InvitationRepository.list_by_list_id` y
-`NotificationService.list_invitations` (valida que la lista exista, igual que el resto de
-métodos de este servicio).
+For (2): added `GET /v1/task-lists/{id}/invitations` (same pagination and authorization pattern
+as `GET /{id}/tasks`), backed by `InvitationRepository.list_by_list_id` and
+`NotificationService.list_invitations` (validates that the list exists, same as the rest of this
+service's methods).
 
 ### Tradeoffs y Consecuencias
 
-- **Positivas (+):** el chequeo en servicio produce un 409 con `code: duplicate_invitation`
-  legible por el cliente, en vez de un 500 por `IntegrityError` sin capturar; el constraint de
-  base de datos cubre la ventana de carrera que el chequeo por sí solo no puede cerrar. El nuevo
-  GET hace que ADR-012 deje de ser una escritura de una sola vía, sin ampliar el alcance de
-  autorización (mismo nivel `CurrentUser` que el resto de `task_lists.py`, consistente con la
-  decisión ya tomada en ADR-012).
-- **Negativas (-):** el chequeo de duplicados es "leer luego escribir", no atómico; bajo
-  concurrencia alta dos requests simultáneos para el mismo `(list_id, email)` podrían ambos
-  pasar el chequeo y competir en el insert — en ese caso, uno de los dos vería un
-  `IntegrityError` sin capturar, que no es `DomainError` y por lo tanto cae en el handler
-  catch-all de `Exception` (500 genérico) en vez de un 409 limpio. Aceptable al volumen de esta
-  app; una solución completa envolvería el insert en un `try/except IntegrityError` además del
-  chequeo.
+- **Positivas (+):** the service-level check produces a client-readable 409 with
+  `code: duplicate_invitation`, instead of a 500 from an uncaught `IntegrityError`; the database
+  constraint covers the race window the check alone can't close. The new GET means ADR-012 is no
+  longer write-only, without widening the authorization scope (same `CurrentUser` level as the
+  rest of `task_lists.py`, consistent with the decision already made in ADR-012).
+- **Negativas (-):** the duplicate check is "read then write", not atomic; under high concurrency
+  two simultaneous requests for the same `(list_id, email)` could both pass the check and race on
+  the insert — in that case, one of the two would see an uncaught `IntegrityError`, which isn't a
+  `DomainError` and therefore falls into the catch-all `Exception` handler (generic 500) instead
+  of a clean 409. Acceptable at this app's volume; a complete solution would wrap the insert in a
+  `try/except IntegrityError` in addition to the check.
 
 ## ADR-014: One-Command Local Onboarding (`make local-run`)
 
@@ -483,32 +478,31 @@ métodos de este servicio).
 
 ### Contexto y Problema
 
-El flujo documentado en el README para levantar el stack con Docker requería copiar
-`.env.example`, correr manualmente cinco comandos `openssl rand`, y pegar cada valor a mano en
-`.env` antes de `docker compose up --build`. Fricción de onboarding pura, sin ningún beneficio de
-seguridad — son secretos de desarrollo local, no de producción.
+The flow documented in the README for bringing up the stack with Docker required copying
+`.env.example`, manually running five `openssl rand` commands, and pasting each value by hand
+into `.env` before `docker compose up --build`. Pure onboarding friction, with no security
+benefit — these are local development secrets, not production ones.
 
 ### Opción Elegida y Justificación
 
-Se agregó `scripts/generate_env.sh`, invocado por el nuevo target `make local-run` (que depende
-de `make env`), que copia `.env.example` a `.env` y rellena únicamente los cinco placeholders de
-secretos (`POSTGRES_SUPERUSER_PASSWORD`, `POSTGRES_MIGRATOR_PASSWORD`, `POSTGRES_PASSWORD`,
-`JWT_SECRET_KEY`, `REDIS_PASSWORD`) con valores generados vía `openssl rand`. El reemplazo se
-hace por nombre de variable (`awk` sobre el `KEY=` exacto), no por texto de placeholder, porque
-`POSTGRES_SUPERUSER_PASSWORD` y `REDIS_PASSWORD` comparten el mismo texto de placeholder en
-`.env.example` — un reemplazo ingenuo les asignaría el mismo secreto. El script es idempotente:
-si `.env` ya existe, no lo toca, para no pisar configuración o secretos que el desarrollador ya
-haya personalizado. `make local-run` termina corriendo `docker compose up --build` como antes;
-el flujo manual con `openssl rand` se conserva en el README como alternativa para quien quiera
-ver o controlar los valores generados.
+Added `scripts/generate_env.sh`, invoked by the new `make local-run` target (which depends on
+`make env`), which copies `.env.example` to `.env` and fills in only the five secret placeholders
+(`POSTGRES_SUPERUSER_PASSWORD`, `POSTGRES_MIGRATOR_PASSWORD`, `POSTGRES_PASSWORD`,
+`JWT_SECRET_KEY`, `REDIS_PASSWORD`) with values generated via `openssl rand`. The replacement is
+done by variable name (`awk` over the exact `KEY=`), not by placeholder text, because
+`POSTGRES_SUPERUSER_PASSWORD` and `REDIS_PASSWORD` share the same placeholder text in
+`.env.example` — a naive replacement would assign them the same secret. The script is
+idempotent: if `.env` already exists, it leaves it untouched, so as not to overwrite
+configuration or secrets the developer has already customized. `make local-run` still ends by
+running `docker compose up --build` as before; the manual `openssl rand` flow is kept in the
+README as an alternative for anyone who wants to see or control the generated values.
 
 ### Tradeoffs y Consecuencias
 
-- **Positivas (+):** onboarding local pasa de "copiar archivo + 5 comandos + edición manual" a
-  un solo `make local-run`; el script nunca imprime los secretos generados (ni por stdout ni por
-  log), solo los escribe a `.env`, consistente con la política zero-leak del resto del repo.
-- **Negativas (-):** esto es una conveniencia exclusivamente de desarrollo local — los secretos
-  generados por `openssl rand` en la máquina del desarrollador no son aptos para ningún entorno
-  compartido (staging/producción), donde sigue haciendo falta un gestor de secretos real (Vault/
-  AWS Secrets Manager/Azure Key Vault, ver Pendientes en el README); este ADR no cambia ni
-  debilita esa necesidad.
+- **Positivas (+):** local onboarding goes from "copy file + 5 commands + manual editing" to a
+  single `make local-run`; the script never prints the generated secrets (neither to stdout nor
+  to a log), only writes them to `.env`, consistent with the rest of the repo's zero-leak policy.
+- **Negativas (-):** this is a local-development-only convenience — secrets generated by
+  `openssl rand` on the developer's machine aren't suitable for any shared environment
+  (staging/production), where a real secrets manager (Vault/AWS Secrets Manager/Azure Key Vault,
+  see Pendientes in the README) is still needed; this ADR doesn't change or weaken that need.
