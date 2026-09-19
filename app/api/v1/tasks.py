@@ -2,7 +2,7 @@ from fastapi import APIRouter, Path, Query, status
 
 from app.api.dependencies import AdminUser, CurrentUser, TaskServiceDep
 from app.schemas.common import ErrorResponse
-from app.schemas.task import TaskCreate, TaskRead, TaskStatusUpdate, TaskUpdate
+from app.schemas.task import TaskAssigneeUpdate, TaskCreate, TaskRead, TaskStatusUpdate, TaskUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -95,6 +95,27 @@ async def change_task_status(
     task_id: int = Path(..., ge=1, description="Task identifier"),
 ) -> TaskRead:
     task = await service.change_status(task_id, data.status)
+    return TaskRead.model_validate(task)
+
+
+@router.patch(
+    "/{task_id}/assignee",
+    response_model=TaskRead,
+    status_code=status.HTTP_200_OK,
+    summary="Assign a responsible user to a task",
+    description="Pass `assignee_id: null` to unassign.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def assign_task(
+    data: TaskAssigneeUpdate,
+    service: TaskServiceDep,
+    _user: CurrentUser,
+    task_id: int = Path(..., ge=1, description="Task identifier"),
+) -> TaskRead:
+    task = await service.assign_task(task_id, data.assignee_id)
     return TaskRead.model_validate(task)
 
 
