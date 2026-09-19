@@ -12,7 +12,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
     response_model=TaskRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create a task",
-    responses={status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}},
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
 )
 async def create_task(data: TaskCreate, service: TaskServiceDep, _user: CurrentUser) -> TaskRead:
     task = await service.create_task(data)

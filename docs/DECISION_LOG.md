@@ -197,7 +197,7 @@ and CORS runs with `allow_credentials=False`.
 
 ## ADR-007: Task List Aggregate (`TaskListModel`, owner-scoped)
 
-**Status:** Propuesto
+**Status:** Aceptado
 **Fecha:** 2026-09-18
 
 ### Contexto y Problema
@@ -222,8 +222,47 @@ aggregate introduction isolated and reviewable on its own.
   independent of the tasks table, so this change doesn't touch `TaskModel`/`TaskRepository`/
   `TaskService`/`tasks.py` at all; the `TaskListNotFoundError` -> 404 handler follows the same
   domain-exception-to-HTTP-status mapping as every other resource.
-- **Negativas (-):** `TaskModel` does not yet reference `task_lists` — there is no `list_id` FK, no
-  `relationship()`, and no way to nest a task under a list or compute a list's completion
-  percentage yet. That linkage, plus filtered/nested listing, is an explicit follow-up; this ADR
-  stays `Propuesto` until it lands, since the list↔task relationship the spec actually asks for is
-  incomplete without it.
+- **Negativas (-):** the initial version of this change shipped without the `list_id` FK on
+  `TaskModel`, so tasks and lists were unlinked; that follow-up landed as ADR-008 (`list_id` FK,
+  bidirectional relationship, cascade delete). Filtered/nested listing with a completion
+  percentage is still not implemented — tracked as a separate follow-up.
+
+## ADR-008: Link Tasks to Task Lists (`list_id` FK, cascade delete)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+ADR-007 introduced `TaskListModel` without linking it to `TaskModel`, deliberately, to keep that
+change reviewable on its own. Use case a.ii (create/get/update/delete tasks within a list) needs
+every task to belong to exactly one list, so `TaskModel` needed the FK and `TaskService` needed to
+validate the parent list exists before creating a task.
+
+### Opción Elegida y Justificación
+
+Added `list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)` to
+`TaskModel`, with a bidirectional `relationship()` (`TaskModel.task_list` /
+`TaskListModel.tasks`, both `lazy="selectin"` for async-session safety) and
+`cascade="all, delete-orphan"` on the list side, so deleting a list deletes its tasks rather than
+leaving orphaned rows. `TaskCreate.list_id` is required; `TaskService.create_task` looks the list
+up via `TaskListRepository.get_by_id` first and raises the existing `TaskListNotFoundError` (already
+mapped to 404 in `app/main.py`) if it's missing — no new exception type needed. `list_id` was
+deliberately left out of `TaskUpdate`: reassigning a task to a different list is a distinct
+operation (would need to re-validate the new list, and arguably its own endpoint/audit trail), out
+of scope here. Since the project has no production data yet (per ADR-003/README Pendientes, this
+is a pre-release challenge submission), the migration adds `list_id` as `NOT NULL` directly with a
+straightforward `alembic revision --autogenerate`, no backfill/default-value multi-step migration
+needed.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** every task now has exactly one owning list, enforced at the DB level (FK,
+  `NOT NULL`), not just in application code; deleting a list cleanly removes its tasks instead of
+  leaving dangling rows; `POST /v1/tasks` with an unknown `list_id` returns a proper 404
+  (`task_list_not_found`) instead of a FK-violation 500.
+- **Negativas (-):** a task can never be created without a list (no "inbox"/unlisted tasks), and
+  moving a task between lists isn't supported yet — both deliberate scope cuts for this change.
+  The `NOT NULL` add-column migration would need a backfill step (default list per owner, or a
+  nullable column with a follow-up migration) before running against a real deployment with
+  existing task rows; that's acceptable only because none exists yet.

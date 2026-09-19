@@ -12,6 +12,7 @@ class TaskCreate(BaseModel):
     description: str | None = Field(
         default=None, max_length=2000, description="Optional task description"
     )
+    list_id: int = Field(..., gt=0, description="Parent task list id")
 
 
 class TaskUpdate(BaseModel):
@@ -30,5 +31,6 @@ class TaskRead(BaseModel):
     title: str
     description: str | None
     status: TaskStatus
+    list_id: int
     created_at: datetime
     updated_at: datetime
