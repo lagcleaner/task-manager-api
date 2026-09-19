@@ -8,6 +8,12 @@ class TaskNotFoundError(DomainError):
         super().__init__(f"Task {task_id} not found")
 
 
+class TaskListNotFoundError(DomainError):
+    def __init__(self, task_list_id: int) -> None:
+        self.task_list_id = task_list_id
+        super().__init__(f"Task list {task_list_id} not found")
+
+
 class EmailAlreadyRegisteredError(DomainError):
     def __init__(self, email: str) -> None:
         self.email = email

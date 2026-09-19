@@ -20,6 +20,7 @@ from app.services.exceptions import (
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     RevokedTokenError,
+    TaskListNotFoundError,
     TaskNotFoundError,
 )
 
@@ -58,6 +59,13 @@ def _error(code: str, message: str) -> dict[str, dict[str, str]]:
 @app.exception_handler(TaskNotFoundError)
 async def task_not_found_handler(request: Request, exc: TaskNotFoundError) -> JSONResponse:
     return JSONResponse(_error("task_not_found", str(exc)), status_code=status.HTTP_404_NOT_FOUND)
+
+
+@app.exception_handler(TaskListNotFoundError)
+async def task_list_not_found_handler(request: Request, exc: TaskListNotFoundError) -> JSONResponse:
+    return JSONResponse(
+        _error("task_list_not_found", str(exc)), status_code=status.HTTP_404_NOT_FOUND
+    )
 
 
 @app.exception_handler(EmailAlreadyRegisteredError)

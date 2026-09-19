@@ -1,18 +1,28 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import TaskModel
+from app.models.task import TaskModel, TaskStatus
+from app.repositories.task_list_repository import TaskListRepository
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
-from app.services.exceptions import TaskNotFoundError
+from app.services.exceptions import TaskListNotFoundError, TaskNotFoundError
 
 
 class TaskService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repository = TaskRepository(session)
+        self._task_list_repository = TaskListRepository(session)
 
     async def create_task(self, data: TaskCreate) -> TaskModel:
-        task = TaskModel(title=data.title, description=data.description)
+        task_list = await self._task_list_repository.get_by_id(data.list_id)
+        if task_list is None:
+            raise TaskListNotFoundError(data.list_id)
+        task = TaskModel(
+            title=data.title,
+            description=data.description,
+            list_id=data.list_id,
+            priority=data.priority,
+        )
         task = await self._repository.add(task)
         await self._session.commit()
         return task
@@ -30,6 +40,13 @@ class TaskService:
         task = await self.get_task(task_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(task, field, value)
+        await self._session.commit()
+        await self._session.refresh(task)
+        return task
+
+    async def change_status(self, task_id: int, status: TaskStatus) -> TaskModel:
+        task = await self.get_task(task_id)
+        task.status = status
         await self._session.commit()
         await self._session.refresh(task)
         return task

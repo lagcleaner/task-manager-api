@@ -2,7 +2,7 @@ from fastapi import APIRouter, Path, Query, status
 
 from app.api.dependencies import AdminUser, CurrentUser, TaskServiceDep
 from app.schemas.common import ErrorResponse
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.schemas.task import TaskCreate, TaskRead, TaskStatusUpdate, TaskUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -12,7 +12,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
     response_model=TaskRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create a task",
-    responses={status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}},
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
 )
 async def create_task(data: TaskCreate, service: TaskServiceDep, _user: CurrentUser) -> TaskRead:
     task = await service.create_task(data)
@@ -72,6 +75,26 @@ async def update_task(
     task_id: int = Path(..., ge=1, description="Task identifier"),
 ) -> TaskRead:
     task = await service.update_task(task_id, data)
+    return TaskRead.model_validate(task)
+
+
+@router.patch(
+    "/{task_id}/status",
+    response_model=TaskRead,
+    status_code=status.HTTP_200_OK,
+    summary="Change task status",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def change_task_status(
+    data: TaskStatusUpdate,
+    service: TaskServiceDep,
+    _user: CurrentUser,
+    task_id: int = Path(..., ge=1, description="Task identifier"),
+) -> TaskRead:
+    task = await service.change_status(task_id, data.status)
     return TaskRead.model_validate(task)
 
 

@@ -1,16 +1,26 @@
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Enum, ForeignKey, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.task_list import TaskListModel
 
 
 class TaskStatus(enum.StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+
+
+class TaskPriority(enum.StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class TaskModel(Base):
@@ -24,5 +34,13 @@ class TaskModel(Base):
         default=TaskStatus.PENDING,
         nullable=False,
     )
+    priority: Mapped[TaskPriority] = mapped_column(
+        Enum(TaskPriority, native_enum=False, length=20),
+        default=TaskPriority.MEDIUM,
+        nullable=False,
+    )
+    list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    task_list: Mapped["TaskListModel"] = relationship(back_populates="tasks", lazy="selectin")

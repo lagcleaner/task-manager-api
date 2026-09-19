@@ -232,3 +232,119 @@ into CI.
   reach `main` if hooks are bypassed; no container image build/vulnerability scan or deploy step
   yet (still tracked in `README.md`'s Pendientes); tests run against SQLite/`fakeredis` in CI, the
   same as locally, so a Postgres- or Redis-specific behavior gap would not be caught here.
+
+## ADR-008: Task List Aggregate (`TaskListModel`, owner-scoped)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+The spec requires list-scoped task management: create/get/update/delete task lists, tasks nested
+within a list, and filtered listing with a completion percentage. The schema only had a flat
+`tasks` table with no notion of a list, so list CRUD (use case a.i) had nowhere to live.
+
+### Opción Elegida y Justificación
+
+Introduce `TaskListModel` (`app/models/task_list.py`) as its own aggregate — `id`, `name`,
+`description`, `owner_id` (FK to `users.id`), timestamps — with a full repository/service/router
+stack (`TaskListRepository`, `TaskListService`, `app/api/v1/task_lists.py`) mirroring the existing
+`Task` stack 1:1. `owner_id` is set from the authenticated user on create, matching the pattern
+where authorization re-reads from the DB rather than trusting a token claim. Task lists own tasks
+via a future `list_id` FK on `TaskModel`, deliberately not added in this change to keep the
+aggregate introduction isolated and reviewable on its own.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** list CRUD (create/get/update/delete) is fully implemented and tested,
+  independent of the tasks table, so this change doesn't touch `TaskModel`/`TaskRepository`/
+  `TaskService`/`tasks.py` at all; the `TaskListNotFoundError` -> 404 handler follows the same
+  domain-exception-to-HTTP-status mapping as every other resource.
+- **Negativas (-):** the initial version of this change shipped without the `list_id` FK on
+  `TaskModel`, so tasks and lists were unlinked; that follow-up landed as ADR-009 (`list_id` FK,
+  bidirectional relationship, cascade delete). Filtered/nested listing with a completion
+  percentage is still not implemented — tracked as a separate follow-up.
+
+## ADR-009: Link Tasks to Task Lists (`list_id` FK, cascade delete)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+ADR-008 introduced `TaskListModel` without linking it to `TaskModel`, deliberately, to keep that
+change reviewable on its own. Use case a.ii (create/get/update/delete tasks within a list) needs
+every task to belong to exactly one list, so `TaskModel` needed the FK and `TaskService` needed to
+validate the parent list exists before creating a task.
+
+### Opción Elegida y Justificación
+
+Added `list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)` to
+`TaskModel`, with a bidirectional `relationship()` (`TaskModel.task_list` /
+`TaskListModel.tasks`, both `lazy="selectin"` for async-session safety) and
+`cascade="all, delete-orphan"` on the list side, so deleting a list deletes its tasks rather than
+leaving orphaned rows. `TaskCreate.list_id` is required; `TaskService.create_task` looks the list
+up via `TaskListRepository.get_by_id` first and raises the existing `TaskListNotFoundError` (already
+mapped to 404 in `app/main.py`) if it's missing — no new exception type needed. `list_id` was
+deliberately left out of `TaskUpdate`: reassigning a task to a different list is a distinct
+operation (would need to re-validate the new list, and arguably its own endpoint/audit trail), out
+of scope here. Since the project has no production data yet (per ADR-003/README Pendientes, this
+is a pre-release challenge submission), the migration adds `list_id` as `NOT NULL` directly with a
+straightforward `alembic revision --autogenerate`, no backfill/default-value multi-step migration
+needed.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** every task now has exactly one owning list, enforced at the DB level (FK,
+  `NOT NULL`), not just in application code; deleting a list cleanly removes its tasks instead of
+  leaving dangling rows; `POST /v1/tasks` with an unknown `list_id` returns a proper 404
+  (`task_list_not_found`) instead of a FK-violation 500.
+- **Negativas (-):** a task can never be created without a list (no "inbox"/unlisted tasks), and
+  moving a task between lists isn't supported yet — both deliberate scope cuts for this change.
+  The `NOT NULL` add-column migration would need a backfill step (default list per owner, or a
+  nullable column with a follow-up migration) before running against a real deployment with
+  existing task rows; that's acceptable only because none exists yet.
+
+## ADR-010: Task Priority Field + Filtered List-Scoped Listing with Completion Percentage
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+Use case a.iv requires listing a task list's tasks with optional `status`/`priority` filters plus
+a completion-percentage figure. `TaskModel` had no `priority` column yet, and there was no
+endpoint scoping task listing to a single list.
+
+### Opción Elegida y Justificación
+
+Added `TaskPriority(enum.StrEnum)` (`LOW`/`MEDIUM`/`HIGH`) and a `priority` column on `TaskModel`,
+mirroring `status`'s existing `Enum(..., native_enum=False, length=20)` pattern exactly, default
+`MEDIUM`, `NOT NULL`. Added `GET /v1/task-lists/{list_id}/tasks` (in `app/api/v1/task_lists.py`,
+not `tasks.py`, since it's "list a list's tasks" not a generic task query) returning
+`TaskListTasksRead { tasks: list[TaskRead], completion_percentage: float }`. `TaskListService.list_tasks`
+computes `completion_percentage` at request time — `completed / total * 100` over **all** tasks in
+the list, rounded to 1 decimal, `0.0` when the list is empty — deliberately not stored/denormalized
+on `TaskListModel`, so it can never drift from the actual task rows, and deliberately computed
+over the *whole* list rather than the filtered subset the caller asked for, since filtering by
+status/priority would otherwise skew the percentage into a meaningless number. `TaskRepository`
+gained `list_by_list_id` (filtered, single-table `select`) and `count_all_and_completed` (two
+`select(func.count())` queries) to keep query logic out of the service per the repository rules.
+While implementing this, found and fixed a pre-existing bug: `TaskCreate.priority` (added here)
+couldn't be set via the API at all under `TaskCreate`'s `strict=True` config, since Pydantic's
+strict mode rejects a JSON string for an `Enum` field; switched `TaskCreate` to `strict=False`
+with a comment, matching the same trade-off already made for `TaskUpdate`/`TaskStatusUpdate`.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** filtered listing and completion percentage are both testable in isolation
+  (`TaskRepository`/`TaskListService` unit tests) without spinning up the full HTTP stack;
+  `completion_percentage` staying unfiltered-by-design is covered by a dedicated test so a future
+  change can't silently couple it to the filter params again.
+- **Negativas (-):** `completion_percentage` costs two extra `COUNT` queries per request (on top
+  of the filtered `SELECT`) since it isn't cached/denormalized; acceptable at this data scale, but
+  would need revisiting (e.g. a materialized counter maintained on status change) if list sizes or
+  request volume grow significantly. `TaskCreate` losing `strict=True` also loosens validation on
+  `title`/`list_id` in that schema, not just `priority` — a narrower fix (a `field_validator` or a
+  `BeforeValidator` on just `priority`) was available but not taken, to stay consistent with the
+  existing `TaskUpdate`/`TaskStatusUpdate` convention in this codebase.
