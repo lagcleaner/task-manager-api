@@ -8,11 +8,14 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-only-jwt-signing-key-32-bytes-mini
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest
+from fakeredis import FakeAsyncRedis
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base, get_db_session  # noqa: E402
 from app.core.rate_limit import limiter  # noqa: E402
+from app.core.redis import get_redis_client  # noqa: E402
 from app.main import app  # noqa: E402
 
 
@@ -39,11 +42,23 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
 
 
 @pytest.fixture
-async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
+async def redis_client() -> AsyncGenerator[Redis]:
+    # In-memory fake, function-scoped so no state leaks between tests.
+    client = FakeAsyncRedis(decode_responses=True)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+async def client(db_session: AsyncSession, redis_client: Redis) -> AsyncGenerator[AsyncClient]:
     async def override_get_db_session() -> AsyncGenerator[AsyncSession]:
         yield db_session
 
+    def override_get_redis_client() -> Redis:
+        return redis_client
+
     app.dependency_overrides[get_db_session] = override_get_db_session
+    app.dependency_overrides[get_redis_client] = override_get_redis_client
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

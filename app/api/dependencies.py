@@ -3,15 +3,18 @@ from typing import Annotated
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db_session
-from app.core.security import InvalidTokenError, decode_access_token
+from app.core.redis import get_redis_client
+from app.core.security import AccessTokenClaims, InvalidTokenError, get_access_token_claims
 from app.models.user import UserModel, UserRole
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
-from app.services.exceptions import AuthenticationError, AuthorizationError
+from app.services.exceptions import AuthenticationError, AuthorizationError, RevokedTokenError
 from app.services.task_service import TaskService
+from app.services.token_service import TokenService
 
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 
@@ -25,27 +28,48 @@ async def get_task_service(session: DbSession) -> AsyncGenerator[TaskService]:
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 
 
-async def get_auth_service(session: DbSession) -> AsyncGenerator[AuthService]:
-    yield AuthService(session)
+RedisDep = Annotated[Redis, Depends(get_redis_client)]
+
+
+async def get_token_service(redis_client: RedisDep) -> AsyncGenerator[TokenService]:
+    yield TokenService(redis_client)
+
+
+TokenServiceDep = Annotated[TokenService, Depends(get_token_service)]
+
+
+async def get_auth_service(
+    session: DbSession, token_service: TokenServiceDep
+) -> AsyncGenerator[AuthService]:
+    yield AuthService(session, token_service)
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 
 
-async def get_current_user(
-    session: DbSession,
+async def get_current_access_claims(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
-) -> UserModel:
+    token_service: TokenServiceDep,
+) -> AccessTokenClaims:
     if credentials is None:
         raise AuthenticationError("Missing bearer token")
 
     try:
-        payload = decode_access_token(credentials.credentials)
+        claims = get_access_token_claims(credentials.credentials)
     except InvalidTokenError as exc:
         raise AuthenticationError(str(exc)) from exc
 
-    user_id = int(payload["sub"])
-    user = await UserRepository(session).get_by_id(user_id)
+    if await token_service.is_access_token_revoked(claims.jti):
+        raise RevokedTokenError("Token revoked")
+
+    return claims
+
+
+CurrentAccessClaims = Annotated[AccessTokenClaims, Depends(get_current_access_claims)]
+
+
+async def get_current_user(session: DbSession, claims: CurrentAccessClaims) -> UserModel:
+    user = await UserRepository(session).get_by_id(claims.user_id)
     if user is None:
         raise AuthenticationError("User no longer exists")
     return user

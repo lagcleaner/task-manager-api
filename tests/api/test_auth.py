@@ -33,7 +33,7 @@ async def test_register_duplicate_email_returns_409(client: AsyncClient) -> None
     assert response.status_code == 409
 
 
-async def test_login_returns_access_token(client: AsyncClient) -> None:
+async def test_login_returns_access_and_refresh_token(client: AsyncClient) -> None:
     await client.post(
         "/v1/auth/register", json={"email": "login@example.com", "password": _PASSWORD}
     )
@@ -46,6 +46,90 @@ async def test_login_returns_access_token(client: AsyncClient) -> None:
     body = response.json()
     assert body["token_type"] == "bearer"
     assert body["access_token"]
+    assert body["refresh_token"]
+
+
+async def test_refresh_rotates_tokens_and_old_refresh_token_is_rejected(
+    client: AsyncClient,
+) -> None:
+    await client.post(
+        "/v1/auth/register", json={"email": "rotate@example.com", "password": _PASSWORD}
+    )
+    login_response = await client.post(
+        "/v1/auth/login", json={"email": "rotate@example.com", "password": _PASSWORD}
+    )
+    old_refresh_token = login_response.json()["refresh_token"]
+
+    refresh_response = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": old_refresh_token}
+    )
+    assert refresh_response.status_code == 200
+    new_body = refresh_response.json()
+    assert new_body["access_token"]
+    assert new_body["refresh_token"] != old_refresh_token
+
+    replay_response = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": old_refresh_token}
+    )
+    assert replay_response.status_code == 401
+    assert replay_response.json()["detail"]["code"] == "invalid_refresh_token"
+
+
+async def test_refresh_rejects_forged_token(client: AsyncClient) -> None:
+    response = await client.post("/v1/auth/refresh", json={"refresh_token": "not-a-real-jwt"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "invalid_refresh_token"
+
+
+async def test_logout_revokes_access_token(client: AsyncClient) -> None:
+    await client.post(
+        "/v1/auth/register", json={"email": "logout@example.com", "password": _PASSWORD}
+    )
+    login_response = await client.post(
+        "/v1/auth/login", json={"email": "logout@example.com", "password": _PASSWORD}
+    )
+    tokens = login_response.json()
+
+    logout_response = await client.post(
+        "/v1/auth/logout",
+        json={"refresh_token": tokens["refresh_token"]},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert logout_response.status_code == 204
+
+    protected_response = await client.get(
+        "/v1/tasks", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert protected_response.status_code == 401
+    assert protected_response.json()["detail"]["code"] == "token_revoked"
+
+
+async def test_logout_also_revokes_provided_refresh_token(client: AsyncClient) -> None:
+    await client.post(
+        "/v1/auth/register", json={"email": "logout2@example.com", "password": _PASSWORD}
+    )
+    login_response = await client.post(
+        "/v1/auth/login", json={"email": "logout2@example.com", "password": _PASSWORD}
+    )
+    tokens = login_response.json()
+
+    await client.post(
+        "/v1/auth/logout",
+        json={"refresh_token": tokens["refresh_token"]},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+
+    refresh_response = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert refresh_response.status_code == 401
+
+
+async def test_logout_without_bearer_token_returns_401(client: AsyncClient) -> None:
+    response = await client.post("/v1/auth/logout", json={})
+
+    assert response.status_code == 401
 
 
 async def test_login_wrong_password_returns_401_generic_message(client: AsyncClient) -> None:

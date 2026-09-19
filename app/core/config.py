@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     jwt_secret_key: SecretStr
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 15
+    jwt_refresh_token_expire_days: int = 7
+
+    # Revocation list (blacklisted access tokens) and refresh-token allowlist,
+    # both keyed by jti with a Redis TTL — see app/core/redis.py.
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: SecretStr | None = None
 
     rate_limit_default: str = "100/minute"
     rate_limit_auth: str = "10/minute"

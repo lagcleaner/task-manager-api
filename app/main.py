@@ -18,6 +18,8 @@ from app.services.exceptions import (
     DomainError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
+    InvalidRefreshTokenError,
+    RevokedTokenError,
     TaskNotFoundError,
 )
 
@@ -80,6 +82,26 @@ async def invalid_credentials_handler(
 async def authentication_error_handler(request: Request, exc: AuthenticationError) -> JSONResponse:
     return JSONResponse(
         _error("authentication_required", "Authentication required"),
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+@app.exception_handler(RevokedTokenError)
+async def revoked_token_handler(request: Request, exc: RevokedTokenError) -> JSONResponse:
+    return JSONResponse(
+        _error("token_revoked", "Token has been revoked"),
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+@app.exception_handler(InvalidRefreshTokenError)
+async def invalid_refresh_token_handler(
+    request: Request, exc: InvalidRefreshTokenError
+) -> JSONResponse:
+    return JSONResponse(
+        _error("invalid_refresh_token", "Refresh token invalid or expired"),
         status_code=status.HTTP_401_UNAUTHORIZED,
         headers={"WWW-Authenticate": "Bearer"},
     )

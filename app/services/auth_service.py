@@ -1,18 +1,30 @@
+from datetime import datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    InvalidTokenError,
+    decode_refresh_token,
+    hash_password,
+    verify_password,
+)
 from app.models.user import UserModel
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import LoginRequest, TokenResponse
+from app.schemas.auth import LoginRequest, TokenPairResponse
 from app.schemas.user import UserCreate
-from app.services.exceptions import EmailAlreadyRegisteredError, InvalidCredentialsError
+from app.services.exceptions import (
+    EmailAlreadyRegisteredError,
+    InvalidCredentialsError,
+    InvalidRefreshTokenError,
+)
+from app.services.token_service import TokenService
 
 
 class AuthService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, token_service: TokenService) -> None:
         self._session = session
         self._repository = UserRepository(session)
+        self._token_service = token_service
 
     async def register_user(self, data: UserCreate) -> UserModel:
         existing = await self._repository.get_by_email(data.email)
@@ -27,8 +39,7 @@ class AuthService:
         await self._session.commit()
         return user
 
-    async def authenticate(self, data: LoginRequest) -> TokenResponse:
-        settings = get_settings()
+    async def authenticate(self, data: LoginRequest) -> TokenPairResponse:
         user = await self._repository.get_by_email(data.email)
         # Same generic error whether the email is unknown or the password is wrong,
         # so responses can't be used to enumerate registered accounts.
@@ -37,8 +48,25 @@ class AuthService:
         ):
             raise InvalidCredentialsError()
 
-        token = create_access_token(user_id=user.id)
-        return TokenResponse(
-            access_token=token,
-            expires_in=settings.jwt_access_token_expire_minutes * 60,
-        )
+        return await self._token_service.issue_token_pair(user_id=user.id)
+
+    async def refresh(self, refresh_token: str) -> TokenPairResponse:
+        try:
+            payload = decode_refresh_token(refresh_token)
+        except InvalidTokenError as exc:
+            raise InvalidRefreshTokenError("Refresh token invalid or expired") from exc
+
+        # Reject up front for a deleted user, rather than after rotation has
+        # already burned the presented refresh token for no benefit.
+        user = await self._repository.get_by_id(int(payload["sub"]))
+        if user is None:
+            raise InvalidRefreshTokenError("Refresh token invalid or expired")
+
+        return await self._token_service.rotate_refresh_token(refresh_token)
+
+    async def logout(
+        self, *, access_jti: str, access_expires_at: datetime, refresh_token: str | None
+    ) -> None:
+        await self._token_service.revoke_access_token(jti=access_jti, expires_at=access_expires_at)
+        if refresh_token is not None:
+            await self._token_service.revoke_refresh_token(refresh_token)

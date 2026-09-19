@@ -23,6 +23,14 @@ class AuthenticationError(DomainError):
     """Missing, malformed, expired, or forged bearer token."""
 
 
+class RevokedTokenError(DomainError):
+    """Access token was explicitly revoked (logout) before its natural expiry."""
+
+
+class InvalidRefreshTokenError(DomainError):
+    """Refresh token is malformed, expired, already rotated, or revoked."""
+
+
 class AuthorizationError(DomainError):
     def __init__(self, required_role: str) -> None:
         self.required_role = required_role

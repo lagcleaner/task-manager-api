@@ -155,3 +155,42 @@ long-running server, using only the DML-only app role). Compose services run wit
 - **Negativas (-):** no TLS termination in-app (assumes a reverse proxy/ingress in front, per
   `README.md`'s Pendientes); Compose alone doesn't give multi-replica orchestration, health-based
   restarts across a cluster, or rolling deploys — out of scope for the challenge's time box.
+
+## ADR-006: Refresh Tokens + Redis-Backed Revocation List
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+Access tokens were 15-minute JWTs with no way to invalidate them before expiry: no logout, and no
+way to force-expire a session (compromised device, password change). Needed refresh tokens for
+longer sessions without lengthening the access token's blast radius, plus a way to revoke a
+specific token immediately.
+
+### Opción Elegida y Justificación
+
+Access and refresh tokens are both JWTs carrying a `jti` and a `type` claim (`access`/`refresh`),
+so one can't be replayed as the other. Refresh tokens (7-day default) use rotation: each
+`/v1/auth/refresh` call deletes the presented token's Redis allowlist entry
+(`refresh_session:{jti}`) and issues a new pair — a second use of the same refresh token (replay)
+finds no allowlist entry and is rejected. `/v1/auth/logout` writes the access token's `jti` to a
+`revoked_access:{jti}` key and deletes the refresh token's allowlist entry. Both key families use
+Redis `EX` set to the token's remaining lifetime, so revoked/rotated entries self-expire — no
+cleanup job needed. Redis was chosen over a Postgres table for this because the data is
+inherently TTL-shaped and read on every authenticated request; a DB table would need its own
+expiry sweep and adds a query to the hot path. Per `.claude/rules/security.md`, tokens are
+returned in the JSON response body, never a cookie — this API has no cookie-based auth surface,
+and CORS runs with `allow_credentials=False`.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** access-token revocation is immediate (checked on every request via
+  `get_current_access_claims`); refresh-token replay after rotation is rejected; no scheduled
+  cleanup job, since Redis TTLs expire entries automatically; `TokenService`
+  (`app/services/token_service.py`) is framework-agnostic and unit-tested against `fakeredis`.
+- **Negativas (-):** adds Redis as a new runtime dependency (`docker-compose.yml`, `REDIS_*` env
+  vars) — a Redis outage blocks login/refresh/logout and every authenticated request (the
+  revocation check is on the read path). Only one active refresh token per issuance is tracked;
+  there's no multi-device session listing or per-device revocation ("log out everywhere" would
+  need to revoke by user id, not implemented here) — out of scope for the challenge's time box.
