@@ -195,7 +195,45 @@ and CORS runs with `allow_credentials=False`.
   there's no multi-device session listing or per-device revocation ("log out everywhere" would
   need to revoke by user id, not implemented here) — out of scope for the challenge's time box.
 
-## ADR-007: Task List Aggregate (`TaskListModel`, owner-scoped)
+## ADR-007: CI Pipeline (GitHub Actions: Security Audit, Lint, Format, Test)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+ADR-004 deferred a GitHub Actions pipeline in favor of local pre-commit/pre-push hooks, but hooks
+only enforce quality gates on contributors who ran `make hooks-install` — nothing blocks a push or
+PR from an environment where hooks are missing or bypassed. Needed server-side enforcement plus a
+dependency vulnerability check, which local hooks don't cover.
+
+### Opción Elegida y Justificación
+
+A single `.github/workflows/ci.yml` runs on push/PR to `main` with four independent jobs, all
+using `astral-sh/setup-uv` and `uv sync --frozen` so CI installs the exact `uv.lock` versions:
+`security` (`uv run --with pip-audit pip-audit --local`, auditing the project's resolved
+dependencies for known CVEs), `lint` (`uv run ruff check .`), `format`
+(`uv run ruff format --check .`), and `test` (`uv run pytest`). Jobs are split rather than
+combined into one so a lint failure doesn't block the test job's results, and so failures are
+attributable at a glance from the PR checks list. `pip-audit` is invoked via `uv run --with`
+instead of `uvx` because `uvx` audits its own ephemeral environment, not the project's resolved
+dependency set — `uv run --with` installs it into the project's `uv`-managed venv first. No new
+dev dependency was added to `pyproject.toml` for either tool, keeping the local dev environment
+unchanged. `mypy --strict` is intentionally left to pre-commit/pre-push only, matching the
+pipeline scope requested for this ADR (security, lint, format, test) — it was not carried over
+into CI.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** every PR to `main` gets the same lint/format/test/dependency-audit gate
+  regardless of whether the contributor installed local hooks; failures surface per-concern in the
+  PR checks UI; no new pinned dev dependency to maintain.
+- **Negativas (-):** `mypy --strict` still only runs locally via pre-commit, so a type error can
+  reach `main` if hooks are bypassed; no container image build/vulnerability scan or deploy step
+  yet (still tracked in `README.md`'s Pendientes); tests run against SQLite/`fakeredis` in CI, the
+  same as locally, so a Postgres- or Redis-specific behavior gap would not be caught here.
+
+## ADR-008: Task List Aggregate (`TaskListModel`, owner-scoped)
 
 **Status:** Aceptado
 **Fecha:** 2026-09-18
@@ -223,18 +261,18 @@ aggregate introduction isolated and reviewable on its own.
   `TaskService`/`tasks.py` at all; the `TaskListNotFoundError` -> 404 handler follows the same
   domain-exception-to-HTTP-status mapping as every other resource.
 - **Negativas (-):** the initial version of this change shipped without the `list_id` FK on
-  `TaskModel`, so tasks and lists were unlinked; that follow-up landed as ADR-008 (`list_id` FK,
+  `TaskModel`, so tasks and lists were unlinked; that follow-up landed as ADR-009 (`list_id` FK,
   bidirectional relationship, cascade delete). Filtered/nested listing with a completion
   percentage is still not implemented — tracked as a separate follow-up.
 
-## ADR-008: Link Tasks to Task Lists (`list_id` FK, cascade delete)
+## ADR-009: Link Tasks to Task Lists (`list_id` FK, cascade delete)
 
 **Status:** Aceptado
 **Fecha:** 2026-09-18
 
 ### Contexto y Problema
 
-ADR-007 introduced `TaskListModel` without linking it to `TaskModel`, deliberately, to keep that
+ADR-008 introduced `TaskListModel` without linking it to `TaskModel`, deliberately, to keep that
 change reviewable on its own. Use case a.ii (create/get/update/delete tasks within a list) needs
 every task to belong to exactly one list, so `TaskModel` needed the FK and `TaskService` needed to
 validate the parent list exists before creating a task.
@@ -267,7 +305,7 @@ needed.
   nullable column with a follow-up migration) before running against a real deployment with
   existing task rows; that's acceptable only because none exists yet.
 
-## ADR-009: Task Priority Field + Filtered List-Scoped Listing with Completion Percentage
+## ADR-010: Task Priority Field + Filtered List-Scoped Listing with Completion Percentage
 
 **Status:** Aceptado
 **Fecha:** 2026-09-18
