@@ -194,3 +194,41 @@ and CORS runs with `allow_credentials=False`.
   revocation check is on the read path). Only one active refresh token per issuance is tracked;
   there's no multi-device session listing or per-device revocation ("log out everywhere" would
   need to revoke by user id, not implemented here) — out of scope for the challenge's time box.
+
+## ADR-007: CI Pipeline (GitHub Actions: Security Audit, Lint, Format, Test)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+ADR-004 deferred a GitHub Actions pipeline in favor of local pre-commit/pre-push hooks, but hooks
+only enforce quality gates on contributors who ran `make hooks-install` — nothing blocks a push or
+PR from an environment where hooks are missing or bypassed. Needed server-side enforcement plus a
+dependency vulnerability check, which local hooks don't cover.
+
+### Opción Elegida y Justificación
+
+A single `.github/workflows/ci.yml` runs on push/PR to `main` with four independent jobs, all
+using `astral-sh/setup-uv` and `uv sync --frozen` so CI installs the exact `uv.lock` versions:
+`security` (`uv run --with pip-audit pip-audit --local`, auditing the project's resolved
+dependencies for known CVEs), `lint` (`uv run ruff check .`), `format`
+(`uv run ruff format --check .`), and `test` (`uv run pytest`). Jobs are split rather than
+combined into one so a lint failure doesn't block the test job's results, and so failures are
+attributable at a glance from the PR checks list. `pip-audit` is invoked via `uv run --with`
+instead of `uvx` because `uvx` audits its own ephemeral environment, not the project's resolved
+dependency set — `uv run --with` installs it into the project's `uv`-managed venv first. No new
+dev dependency was added to `pyproject.toml` for either tool, keeping the local dev environment
+unchanged. `mypy --strict` is intentionally left to pre-commit/pre-push only, matching the
+pipeline scope requested for this ADR (security, lint, format, test) — it was not carried over
+into CI.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** every PR to `main` gets the same lint/format/test/dependency-audit gate
+  regardless of whether the contributor installed local hooks; failures surface per-concern in the
+  PR checks UI; no new pinned dev dependency to maintain.
+- **Negativas (-):** `mypy --strict` still only runs locally via pre-commit, so a type error can
+  reach `main` if hooks are bypassed; no container image build/vulnerability scan or deploy step
+  yet (still tracked in `README.md`'s Pendientes); tests run against SQLite/`fakeredis` in CI, the
+  same as locally, so a Postgres- or Redis-specific behavior gap would not be caught here.
