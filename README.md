@@ -52,6 +52,10 @@ uv sync
 cp .env.example .env
 # For a single local Postgres user without the role split, it's fine to set
 # POSTGRES_MIGRATOR_USER/PASSWORD to the same values as POSTGRES_USER/PASSWORD.
+# Point at a locally running Postgres (POSTGRES_HOST=localhost in .env — the
+# default `db` value only resolves inside the Compose network) — install one
+# via your OS package manager, or run just the db container:
+#   docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" postgres:16
 uv run alembic upgrade head
 docker run --rm -p 6379:6379 redis:7-alpine redis-server --requirepass "$REDIS_PASSWORD"
 uv run fastapi dev app/main.py
