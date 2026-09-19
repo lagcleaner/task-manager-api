@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task_list import TaskListModel
 from app.models.user import UserModel, UserRole
-from app.services.exceptions import TaskListNotFoundError
+from app.services.exceptions import DuplicateInvitationError, TaskListNotFoundError
 from app.services.notification_service import NotificationService
 
 
@@ -46,3 +46,39 @@ async def test_send_task_list_invitation_raises_when_list_missing(
 
     with pytest.raises(TaskListNotFoundError):
         await service.send_task_list_invitation(999, "invitee@example.com", invited_by_id=owner.id)
+
+
+async def test_send_task_list_invitation_raises_when_duplicate(db_session: AsyncSession) -> None:
+    owner = await _create_user(db_session, "owner2@example.com")
+    task_list = await _create_task_list(db_session, owner.id)
+    service = NotificationService(db_session)
+    await service.send_task_list_invitation(
+        task_list.id, "invitee@example.com", invited_by_id=owner.id
+    )
+
+    with pytest.raises(DuplicateInvitationError):
+        await service.send_task_list_invitation(
+            task_list.id, "invitee@example.com", invited_by_id=owner.id
+        )
+
+
+async def test_list_invitations_returns_persisted_invitations(db_session: AsyncSession) -> None:
+    owner = await _create_user(db_session, "owner3@example.com")
+    task_list = await _create_task_list(db_session, owner.id)
+    service = NotificationService(db_session)
+    await service.send_task_list_invitation(task_list.id, "one@example.com", invited_by_id=owner.id)
+    await service.send_task_list_invitation(task_list.id, "two@example.com", invited_by_id=owner.id)
+
+    invitations = await service.list_invitations(task_list.id)
+
+    assert {invitation.email for invitation in invitations} == {
+        "one@example.com",
+        "two@example.com",
+    }
+
+
+async def test_list_invitations_raises_when_list_missing(db_session: AsyncSession) -> None:
+    service = NotificationService(db_session)
+
+    with pytest.raises(TaskListNotFoundError):
+        await service.list_invitations(999)
