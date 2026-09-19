@@ -25,7 +25,7 @@ db/init/          # one-shot SQL/shell scripts that provision least-privilege Po
 tests/            # pytest, mirrors app/ structure (api/, services/, repositories/, core/)
 ```
 
-Directory-specific conventions live in `.claude/rules/*.md` and are loaded automatically based on the file path being edited. Read them before editing files in `app/api/`, `app/schemas/`, `app/models/`, `app/services/`, `app/repositories/`, `app/core/`, or `tests/`. `.claude/rules/security.md` applies across all of `app/`, `tests/`, and the Docker/compose files — read it before touching auth, secrets, or error handling.
+Directory-specific conventions live in `.claude/rules/*.md` and are loaded automatically based on the file path being edited. Read them before editing files in `app/api/`, `app/schemas/`, `app/models/`, `app/services/`, `app/repositories/`, `app/core/`, or `tests/`. `.claude/rules/security.md` applies across all of `app/`, `tests/`, and the Docker/compose files — read it before touching auth, secrets, or error handling. `.claude/rules/adr-standards.md` defines the ADR format — read it before adding or editing an entry in [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md).
 
 Auth: JWT bearer tokens (`app/core/security.py`), issued by `POST /v1/auth/login`. `app/api/dependencies.py` exposes `CurrentUser` (any authenticated user) and `AdminUser` (RBAC-gated) for use in route signatures — authorization always re-reads the user's role from the database, never trusts a claim baked into the token.
 

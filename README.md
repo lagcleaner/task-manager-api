@@ -61,6 +61,10 @@ Tests run against an in-memory SQLite (aiosqlite) database per test, no Postgres
 
 ## Architecture decisions
 
+Full ADR-formatted rationale (context, chosen option, tradeoffs) lives in
+[`docs/DECISION_LOG.md`](docs/DECISION_LOG.md), following the standard in
+`.claude/rules/adr-standards.md`. Summary:
+
 - **Clean/layered architecture** (`api -> services -> repositories -> models`, `schemas` used at
   the `api`/`services` boundary): keeps HTTP concerns, business rules, and persistence queries
   independently testable and replaceable. See `CLAUDE.md` for the full directory contract and
