@@ -22,6 +22,7 @@ from app.services.exceptions import (
     RevokedTokenError,
     TaskListNotFoundError,
     TaskNotFoundError,
+    UserNotFoundError,
 )
 
 settings = get_settings()
@@ -66,6 +67,11 @@ async def task_list_not_found_handler(request: Request, exc: TaskListNotFoundErr
     return JSONResponse(
         _error("task_list_not_found", str(exc)), status_code=status.HTTP_404_NOT_FOUND
     )
+
+
+@app.exception_handler(UserNotFoundError)
+async def user_not_found_handler(request: Request, exc: UserNotFoundError) -> JSONResponse:
+    return JSONResponse(_error("user_not_found", str(exc)), status_code=status.HTTP_404_NOT_FOUND)
 
 
 @app.exception_handler(EmailAlreadyRegisteredError)
