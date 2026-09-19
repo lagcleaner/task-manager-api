@@ -24,6 +24,13 @@ class TaskUpdate(BaseModel):
     status: TaskStatus | None = Field(default=None)
 
 
+class TaskStatusUpdate(BaseModel):
+    # strict mode disabled: status arrives as a JSON string and needs coercion into TaskStatus
+    model_config = ConfigDict(strict=False)
+
+    status: TaskStatus = Field(..., description="New task status")
+
+
 class TaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True)
 

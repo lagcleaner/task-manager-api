@@ -89,6 +89,33 @@ async def test_update_task_changes_status(client: AsyncClient) -> None:
     assert response.json()["status"] == "completed"
 
 
+async def test_change_task_status_returns_200(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "status-updater@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    created = await client.post(
+        "/v1/tasks", json={"title": "Ship feature", "list_id": list_id}, headers=headers
+    )
+    task_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/v1/tasks/{task_id}/status", json={"status": "in_progress"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "in_progress"
+
+
+async def test_change_task_status_returns_404_when_missing(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "status-missing@example.com")
+
+    response = await client.patch(
+        "/v1/tasks/999/status", json={"status": "in_progress"}, headers=headers
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "task_not_found"
+
+
 async def test_delete_task_as_regular_user_returns_403(client: AsyncClient) -> None:
     headers = await _register_and_login(client, "regular@example.com")
     list_id = await _create_task_list(client, headers, "Groceries")

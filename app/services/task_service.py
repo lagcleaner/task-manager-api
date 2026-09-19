@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import TaskModel
+from app.models.task import TaskModel, TaskStatus
 from app.repositories.task_list_repository import TaskListRepository
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
@@ -35,6 +35,13 @@ class TaskService:
         task = await self.get_task(task_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(task, field, value)
+        await self._session.commit()
+        await self._session.refresh(task)
+        return task
+
+    async def change_status(self, task_id: int, status: TaskStatus) -> TaskModel:
+        task = await self.get_task(task_id)
+        task.status = status
         await self._session.commit()
         await self._session.refresh(task)
         return task

@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.task import TaskStatus
 from app.models.task_list import TaskListModel
 from app.schemas.task import TaskCreate, TaskUpdate
 from app.services.exceptions import TaskListNotFoundError, TaskNotFoundError
@@ -48,3 +49,13 @@ async def test_update_task_applies_partial_changes(db_session: AsyncSession) -> 
     updated = await service.update_task(task.id, TaskUpdate(title="Renamed"))
 
     assert updated.title == "Renamed"
+
+
+async def test_change_status_updates_task_status(db_session: AsyncSession) -> None:
+    task_list = await _create_task_list(db_session)
+    service = TaskService(db_session)
+    task = await service.create_task(TaskCreate(title="Original", list_id=task_list.id))
+
+    updated = await service.change_status(task.id, TaskStatus.IN_PROGRESS)
+
+    assert updated.status == TaskStatus.IN_PROGRESS
