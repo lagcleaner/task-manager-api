@@ -32,9 +32,12 @@ async def security_headers_middleware(
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     # Swagger/Redoc load their assets from a CDN, so they need a looser policy than the
     # rest of this JSON-only API, which serves no HTML/JS and can stay locked to 'none'.
+    # script-src needs 'unsafe-inline' too: FastAPI's generated /docs and /redoc HTML embeds
+    # the SwaggerUIBundle/Redoc init call as an inline <script>, not a separate file — without
+    # it the browser silently blocks that script and the page renders blank.
     if request.url.path.startswith(_DOCS_PATHS):
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' cdn.jsdelivr.net; "
+            "default-src 'self'; script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
             "img-src 'self' data: fastapi.tiangolo.com"
         )
