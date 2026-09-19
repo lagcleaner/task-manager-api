@@ -387,3 +387,47 @@ con el resto del esquema y para no acoplar el contrato de tareas al de usuarios.
   registrado puede ser asignado a cualquier tarea; aceptable dado el alcance actual de la app.
   Tampoco se agregó notificación (real o ficticia) al asignar — eso es el caso de uso b.iv,
   fuera del alcance de este ADR.
+
+## ADR-012: Fake Invitation Notification (`InvitationModel`, logged-only send)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-19
+
+### Contexto y Problema
+
+Caso de uso b.iv (bonus) pide simular el envío de una invitación por email a un usuario, sin
+integración real de correo. No existía ningún modelo ni endpoint para representar "se invitó a
+alguien a colaborar en algo".
+
+### Opción Elegida y Justificación
+
+Se modeló la invitación como un evento inmutable ligado a una `TaskListModel` (invitar a
+colaborar en una lista, no en una tarea individual): `InvitationModel` con `list_id` (FK a
+`task_lists.id`), `email` (string libre, no necesariamente un usuario ya registrado — se puede
+invitar a alguien que aún no existe en el sistema), `invited_by_id` (FK a `users.id`, quien
+invita) y `created_at` únicamente (sin `updated_at`: una invitación no se edita, es un registro
+de que un envío ocurrió). Se persiste como fila propia (`invitations` table, relationship
+`TaskListModel.invitations` con `cascade="all, delete-orphan"`, igual que `tasks`) en vez de
+solo loguear sin guardar nada, para que el envío quede auditable y sea verificable en tests sin
+depender de capturar logs. El "envío" es completamente ficticio: `NotificationService.
+send_task_list_invitation` valida que la lista exista (`TaskListNotFoundError`, reutilizada, sin
+excepción nueva) y luego solo hace `logger.info("[FAKE EMAIL] ...")` — deliberadamente sin
+ninguna librería de email real (SMTP, SES, etc.), que es exactamente el límite de alcance que
+pide el enunciado ("no real"). El endpoint `POST /v1/task-lists/{id}/invitations` usa el mismo
+nivel de autorización (`CurrentUser`) que el resto de endpoints de mutación de `task_lists.py`
+(create/update): ninguno de ellos valida hoy que el caller sea el `owner_id` de la lista, así que
+agregar esa restricción solo aquí introduciría una inconsistencia nueva y fuera de alcance, no
+una corrección de algo roto.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** el envío fake queda probado end-to-end (unit test en `NotificationService`
+  + integración en `POST /task-lists/{id}/invitations`) verificando la fila persistida, sin
+  necesidad de mockear ninguna librería de correo real porque nunca existió una. `email` como
+  string simple (no FK a `users`) permite invitar a direcciones que todavía no tienen cuenta,
+  que es el caso de uso real de una invitación.
+- **Negativas (-):** no hay endpoint para listar o consultar invitaciones enviadas (fuera de
+  alcance de b.iv), así que hoy solo son verificables por quien las creó, vía la respuesta del
+  POST o consultando la base de datos directamente. Al no haber restricción de ownership sobre
+  quién puede invitar a una lista, cualquier usuario autenticado puede invitar a cualquier email
+  a cualquier lista existente; mismo trade-off ya aceptado en el resto de `task_lists.py`.
