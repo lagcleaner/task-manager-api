@@ -34,6 +34,7 @@ Auth: JWT bearer tokens (`app/core/security.py`), issued by `POST /v1/auth/login
 - Install deps: `uv sync`
 - Run dev server: `uv run fastapi dev app/main.py`
 - Run full stack (API + Postgres): `docker compose up --build`
+- Run full stack with auto-generated .env: `make local-run`
 - Run tests: `uv run pytest`
 - Run a single test: `uv run pytest tests/path/to/test_file.py::test_name`
 - Lint: `uv run ruff check .`

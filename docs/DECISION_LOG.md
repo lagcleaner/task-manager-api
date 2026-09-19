@@ -475,3 +475,40 @@ métodos de este servicio).
   catch-all de `Exception` (500 genérico) en vez de un 409 limpio. Aceptable al volumen de esta
   app; una solución completa envolvería el insert en un `try/except IntegrityError` además del
   chequeo.
+
+## ADR-014: One-Command Local Onboarding (`make local-run`)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-19
+
+### Contexto y Problema
+
+El flujo documentado en el README para levantar el stack con Docker requería copiar
+`.env.example`, correr manualmente cinco comandos `openssl rand`, y pegar cada valor a mano en
+`.env` antes de `docker compose up --build`. Fricción de onboarding pura, sin ningún beneficio de
+seguridad — son secretos de desarrollo local, no de producción.
+
+### Opción Elegida y Justificación
+
+Se agregó `scripts/generate_env.sh`, invocado por el nuevo target `make local-run` (que depende
+de `make env`), que copia `.env.example` a `.env` y rellena únicamente los cinco placeholders de
+secretos (`POSTGRES_SUPERUSER_PASSWORD`, `POSTGRES_MIGRATOR_PASSWORD`, `POSTGRES_PASSWORD`,
+`JWT_SECRET_KEY`, `REDIS_PASSWORD`) con valores generados vía `openssl rand`. El reemplazo se
+hace por nombre de variable (`awk` sobre el `KEY=` exacto), no por texto de placeholder, porque
+`POSTGRES_SUPERUSER_PASSWORD` y `REDIS_PASSWORD` comparten el mismo texto de placeholder en
+`.env.example` — un reemplazo ingenuo les asignaría el mismo secreto. El script es idempotente:
+si `.env` ya existe, no lo toca, para no pisar configuración o secretos que el desarrollador ya
+haya personalizado. `make local-run` termina corriendo `docker compose up --build` como antes;
+el flujo manual con `openssl rand` se conserva en el README como alternativa para quien quiera
+ver o controlar los valores generados.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** onboarding local pasa de "copiar archivo + 5 comandos + edición manual" a
+  un solo `make local-run`; el script nunca imprime los secretos generados (ni por stdout ni por
+  log), solo los escribe a `.env`, consistente con la política zero-leak del resto del repo.
+- **Negativas (-):** esto es una conveniencia exclusivamente de desarrollo local — los secretos
+  generados por `openssl rand` en la máquina del desarrollador no son aptos para ningún entorno
+  compartido (staging/producción), donde sigue haciendo falta un gestor de secretos real (Vault/
+  AWS Secrets Manager/Azure Key Vault, ver Pendientes en el README); este ADR no cambia ni
+  debilita esa necesidad.
