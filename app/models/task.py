@@ -9,6 +9,7 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.task_list import TaskListModel
+    from app.models.user import UserModel
 
 
 class TaskStatus(enum.StrEnum):
@@ -40,7 +41,9 @@ class TaskModel(Base):
         nullable=False,
     )
     list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)
+    assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     task_list: Mapped["TaskListModel"] = relationship(back_populates="tasks", lazy="selectin")
+    assignee: Mapped["UserModel | None"] = relationship(lazy="selectin")
