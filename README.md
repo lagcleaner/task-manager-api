@@ -194,9 +194,9 @@ Implemented, mapped to the request:
 - Embedding the DB password directly in a single `DATABASE_URL` string → replaced with individual
   `SecretStr`-typed credential fields, so the password never appears in a config repr/log line.
 
-## Futuras mejoras / Pendientes
+## Future improvements
 
-Out of scope for the 4-6h time box, in rough priority order:
+Out of scope for this project at the moment, in rough priority order:
 
 - CI/CD (GitHub Actions): lint, type-check, test on PR; build/push image on merge to `main`;
   container vulnerability scanning (Trivy/Grype) as a required check.
