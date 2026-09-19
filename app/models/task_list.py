@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.invitation import InvitationModel
     from app.models.task import TaskModel
 
 
@@ -21,5 +22,8 @@ class TaskListModel(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     tasks: Mapped[list["TaskModel"]] = relationship(
+        back_populates="task_list", cascade="all, delete-orphan", lazy="selectin"
+    )
+    invitations: Mapped[list["InvitationModel"]] = relationship(
         back_populates="task_list", cascade="all, delete-orphan", lazy="selectin"
     )
