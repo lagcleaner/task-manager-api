@@ -1,7 +1,13 @@
-.PHONY: setup dev lint format test migrate migrate-new down
+.PHONY: setup dev lint format test migrate migrate-new down hooks-install hooks-run
 
 setup: ## Create .venv and install all deps (incl. dev group)
 	uv sync
+
+hooks-install: ## Install pre-commit + pre-push git hooks
+	uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+
+hooks-run: ## Run all pre-commit hooks against the full repo
+	uv run pre-commit run --all-files
 
 dev: ## Run local dev server with reload
 	uv run fastapi dev app/main.py
