@@ -8,7 +8,8 @@ Clean Architecture Task Management API built with Python and FastAPI.
 - **Database**: PostgreSQL, SQLAlchemy 2.0 (async) + asyncpg, Alembic migrations
 - **Package manager**: uv
 - **Validation/config**: Pydantic v2 + pydantic-settings (`SecretStr` for all credentials)
-- **Auth**: JWT bearer tokens (`pyjwt`), `bcrypt` password hashing, RBAC
+- **Auth**: JWT bearer access + refresh tokens (`pyjwt`), `bcrypt` password hashing, RBAC
+- **Token revocation**: Redis-backed refresh-token rotation + access-token blacklist
 - **Rate limiting**: `slowapi`
 - **Testing**: pytest, pytest-asyncio, httpx (`AsyncClient`), aiosqlite for isolated test DB
 - **Lint/format**: ruff · **Types**: mypy (strict)
@@ -23,14 +24,17 @@ openssl rand -base64 24   # -> POSTGRES_SUPERUSER_PASSWORD
 openssl rand -base64 24   # -> POSTGRES_MIGRATOR_PASSWORD
 openssl rand -base64 24   # -> POSTGRES_PASSWORD
 openssl rand -hex 32      # -> JWT_SECRET_KEY
+openssl rand -base64 24   # -> REDIS_PASSWORD
 
 docker compose up --build
 ```
 
-API on `http://localhost:8000`, docs on `http://localhost:8000/docs`. Compose runs three
+API on `http://localhost:8000`, docs on `http://localhost:8000/docs`. Compose runs four
 services: `db` (Postgres 16, provisions least-privilege roles on first boot via
-`db/init/001_create_roles.sh`), `migrate` (one-shot `alembic upgrade head` using the DDL-capable
-migrator role, then exits), and `api` (the long-running server, using only the DML-only app role).
+`db/init/001_create_roles.sh`), `redis` (7-alpine, password-protected — backs refresh-token
+rotation and access-token revocation), `migrate` (one-shot `alembic upgrade head` using the
+DDL-capable migrator role, then exits), and `api` (the long-running server, using only the
+DML-only app role).
 
 ## Quickstart (local, no Docker)
 
@@ -40,8 +44,12 @@ cp .env.example .env
 # For a single local Postgres user without the role split, it's fine to set
 # POSTGRES_MIGRATOR_USER/PASSWORD to the same values as POSTGRES_USER/PASSWORD.
 uv run alembic upgrade head
+docker run --rm -p 6379:6379 redis:7-alpine redis-server --requirepass "$REDIS_PASSWORD"
 uv run fastapi dev app/main.py
 ```
+
+A running Redis is required — it backs refresh-token rotation and access-token revocation,
+checked on every authenticated request.
 
 ## Tests
 
@@ -54,10 +62,17 @@ Tests run against an in-memory SQLite (aiosqlite) database per test, no Postgres
 ## API flow
 
 1. `POST /v1/auth/register` — create an account (role always starts as `user`).
-2. `POST /v1/auth/login` — exchange credentials for a bearer access token.
-3. Call `/v1/tasks*` with `Authorization: Bearer <token>`. Deleting a task requires the `admin`
-   role (there's no self-service promotion endpoint by design — promote via a direct DB write or
-   a future internal admin tool).
+2. `POST /v1/auth/login` — exchange credentials for an access token (15 min) + refresh token
+   (7 days), returned in the JSON body.
+3. Call `/v1/tasks*` with `Authorization: Bearer <access_token>`. Deleting a task requires the
+   `admin` role (there's no self-service promotion endpoint by design — promote via a direct DB
+   write or a future internal admin tool).
+4. `POST /v1/auth/refresh` with `{"refresh_token": "..."}` — exchanges it for a new pair and
+   rotates the refresh token; the presented one is invalidated immediately, so reusing it (replay)
+   is rejected.
+5. `POST /v1/auth/logout` (authenticated) with an optional `{"refresh_token": "..."}` — revokes
+   the current access token immediately (checked on every subsequent request) and, if provided,
+   the refresh token.
 
 ## Architecture decisions
 
@@ -85,6 +100,10 @@ Full ADR-formatted rationale (context, chosen option, tradeoffs) lives in
   box.
 - **Multi-stage Dockerfile**: `uv sync` runs in a builder stage; the runtime image copies only the
   built virtualenv and app code, and drops to a non-root user.
+- **Redis for refresh-token rotation + access-token revocation** (`app/services/token_service.py`):
+  TTL-keyed allowlist/blacklist entries self-expire, no cleanup job needed; chosen over a Postgres
+  table since the data is inherently TTL-shaped and read on every authenticated request. See
+  ADR-006.
 
 ## 🔒 Security Audit & Compliance
 
@@ -106,12 +125,19 @@ Implemented, mapped to the request:
   exact fields and constraints (`app/schemas/`); no `dict`/`**kwargs` input. Passwords require
   ≥12 characters plus a letter and a digit (`app/schemas/user.py`) and are hashed with `bcrypt`
   before storage; `UserRead` has no password field, so it can never be echoed back.
-- **JWT auth + RBAC.** `POST /v1/auth/login` issues a bearer token (`app/core/security.py`,
-  HS256, 15 min default expiry) carrying only the subject — never a role, so authorization
-  (`require_role` in `app/api/dependencies.py`) always re-reads the current role from the
-  database and a demoted/deleted user's still-valid token stops working immediately. Every
-  `/v1/tasks*` route requires `CurrentUser`; `DELETE /v1/tasks/{id}` additionally requires
+- **JWT auth + RBAC.** `POST /v1/auth/login` issues a bearer access token (`app/core/security.py`,
+  HS256, 15 min default expiry) carrying only the subject (+ `jti`/`type`) — never a role, so
+  authorization (`require_role` in `app/api/dependencies.py`) always re-reads the current role
+  from the database and a demoted/deleted user's still-valid token stops working immediately.
+  Every `/v1/tasks*` route requires `CurrentUser`; `DELETE /v1/tasks/{id}` additionally requires
   `AdminUser`.
+- **Refresh-token rotation + revocation list (Redis).** Refresh tokens (7-day default) are
+  single-use: `POST /v1/auth/refresh` deletes the presented token's Redis allowlist entry and
+  issues a new pair, so replaying an already-rotated refresh token is rejected
+  (`InvalidRefreshTokenError`, 401). `POST /v1/auth/logout` blacklists the current access token's
+  `jti` (checked on every request via `get_current_access_claims`) and revokes the associated
+  refresh token if provided. Both key families carry a Redis TTL equal to the token's remaining
+  lifetime, so entries self-expire. See ADR-006.
 - **No user enumeration.** Login returns the same generic "Invalid email or password" for both an
   unknown email and a wrong password (`InvalidCredentialsError`).
 - **Generic error responses.** All domain/auth exceptions map to fixed, non-leaking messages in
@@ -160,8 +186,6 @@ Out of scope for the 4-6h time box, in rough priority order:
   authorization server in-house wasn't justified for this challenge's scope; the JWT
   resource-server + RBAC implemented here is the right-sized baseline and the natural seam to
   swap in an external IdP later (verify tokens from that IdP instead of issuing our own).
-- Refresh tokens / token revocation list — access tokens currently just expire (15 min default);
-  there's no logout-that-actually-invalidates-a-token yet.
 - Secrets manager integration (Vault/AWS Secrets Manager/Azure Key Vault) for non-local
   environments, replacing `.env` files.
 - Structured/JSON logging + request tracing correlated with the `X-Request-ID` header already
@@ -173,5 +197,8 @@ Out of scope for the 4-6h time box, in rough priority order:
   for anything that becomes Postgres-specific.
 - Soft delete / audit trail on `TaskModel` and `UserModel` if the domain needs history instead of
   hard deletes.
-- Distributed rate-limit storage (Redis) — `slowapi`'s default in-memory storage doesn't share
-  state across multiple API replicas.
+- Distributed rate-limit storage — `slowapi`'s default in-memory storage doesn't share state
+  across multiple API replicas; Redis is already a runtime dependency (token revocation), so
+  pointing `slowapi` at it is the natural next step.
+- "Log out everywhere" / per-device session revocation — only one active refresh token is
+  tracked per issuance; there's no way to revoke all of a user's sessions by user id.
