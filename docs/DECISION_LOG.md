@@ -194,3 +194,36 @@ and CORS runs with `allow_credentials=False`.
   revocation check is on the read path). Only one active refresh token per issuance is tracked;
   there's no multi-device session listing or per-device revocation ("log out everywhere" would
   need to revoke by user id, not implemented here) — out of scope for the challenge's time box.
+
+## ADR-007: Task List Aggregate (`TaskListModel`, owner-scoped)
+
+**Status:** Propuesto
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+The spec requires list-scoped task management: create/get/update/delete task lists, tasks nested
+within a list, and filtered listing with a completion percentage. The schema only had a flat
+`tasks` table with no notion of a list, so list CRUD (use case a.i) had nowhere to live.
+
+### Opción Elegida y Justificación
+
+Introduce `TaskListModel` (`app/models/task_list.py`) as its own aggregate — `id`, `name`,
+`description`, `owner_id` (FK to `users.id`), timestamps — with a full repository/service/router
+stack (`TaskListRepository`, `TaskListService`, `app/api/v1/task_lists.py`) mirroring the existing
+`Task` stack 1:1. `owner_id` is set from the authenticated user on create, matching the pattern
+where authorization re-reads from the DB rather than trusting a token claim. Task lists own tasks
+via a future `list_id` FK on `TaskModel`, deliberately not added in this change to keep the
+aggregate introduction isolated and reviewable on its own.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** list CRUD (create/get/update/delete) is fully implemented and tested,
+  independent of the tasks table, so this change doesn't touch `TaskModel`/`TaskRepository`/
+  `TaskService`/`tasks.py` at all; the `TaskListNotFoundError` -> 404 handler follows the same
+  domain-exception-to-HTTP-status mapping as every other resource.
+- **Negativas (-):** `TaskModel` does not yet reference `task_lists` — there is no `list_id` FK, no
+  `relationship()`, and no way to nest a task under a list or compute a list's completion
+  percentage yet. That linkage, plus filtered/nested listing, is an explicit follow-up; this ADR
+  stays `Propuesto` until it lands, since the list↔task relationship the spec actually asks for is
+  incomplete without it.
