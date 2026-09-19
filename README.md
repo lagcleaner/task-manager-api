@@ -74,49 +74,57 @@ Tests run against an in-memory SQLite (aiosqlite) database per test, no Postgres
 
 ## API flow
 
-1. `POST /v1/auth/register` — create an account (role always starts as `user`).
-2. `POST /v1/auth/login` — exchange credentials for an access token (15 min) + refresh token
+1. `GET /v1/health` — liveness check, no auth.
+2. `POST /v1/auth/register` — create an account (role always starts as `user`).
+3. `POST /v1/auth/login` — exchange credentials for an access token (15 min) + refresh token
    (7 days), returned in the JSON body.
-3. Call `/v1/tasks*` with `Authorization: Bearer <access_token>`. Deleting a task requires the
-   `admin` role (there's no self-service promotion endpoint by design — promote via a direct DB
-   write or a future internal admin tool).
-4. `POST /v1/auth/refresh` with `{"refresh_token": "..."}` — exchanges it for a new pair and
+4. `POST /v1/task-lists`, `GET /v1/task-lists`, `GET /v1/task-lists/{id}`,
+   `PATCH /v1/task-lists/{id}` — create/list/get/update task lists (`CurrentUser`).
+   `DELETE /v1/task-lists/{id}` requires the `admin` role.
+5. `GET /v1/task-lists/{id}/tasks` — list a task list's tasks, filterable by `status`/`priority`,
+   with a `completion_percentage` computed over the unfiltered set (`CurrentUser`).
+6. `POST /v1/task-lists/{id}/invitations`, `GET /v1/task-lists/{id}/invitations` — send/list fake
+   collaboration invitations for a task list (logged and persisted, no real email sent;
+   `CurrentUser`).
+7. `POST /v1/tasks`, `GET /v1/tasks`, `GET /v1/tasks/{id}`, `PATCH /v1/tasks/{id}`,
+   `PATCH /v1/tasks/{id}/status`, `PATCH /v1/tasks/{id}/assignee` — create/list/get/update a task,
+   change its status, and (re)assign or unassign it (`assignee_id: null`) (`CurrentUser`).
+   `DELETE /v1/tasks/{id}` requires the `admin` role (there's no self-service promotion endpoint
+   by design — promote via a direct DB write or a future internal admin tool).
+8. `POST /v1/auth/refresh` with `{"refresh_token": "..."}` — exchanges it for a new pair and
    rotates the refresh token; the presented one is invalidated immediately, so reusing it (replay)
    is rejected.
-5. `POST /v1/auth/logout` (authenticated) with an optional `{"refresh_token": "..."}` — revokes
+9. `POST /v1/auth/logout` (authenticated) with an optional `{"refresh_token": "..."}` — revokes
    the current access token immediately (checked on every subsequent request) and, if provided,
    the refresh token.
 
-## Architecture decisions
+## Architecture
 
-Full ADR-formatted rationale (context, chosen option, tradeoffs) lives in
-[`docs/DECISION_LOG.md`](docs/DECISION_LOG.md), following the standard in
-`.claude/rules/adr-standards.md`. Summary:
+Clean Architecture with strict dependency direction: `api -> services -> schemas`/`repositories`
+-> `models`. Business logic never imports FastAPI types (`Request`, `Response`, `Depends`).
 
-- **Clean/layered architecture** (`api -> services -> repositories -> models`, `schemas` used at
-  the `api`/`services` boundary): keeps HTTP concerns, business rules, and persistence queries
-  independently testable and replaceable. See `CLAUDE.md` for the full directory contract and
-  `.claude/rules/*.md` for per-layer rules.
-- **Repository layer** (`app/repositories/`): isolates SQLAlchemy query construction from business
-  logic in `app/services/`, so services stay framework- and query-agnostic and are easy to unit
-  test with a mocked repository.
-- **Domain exceptions** (`app/services/exceptions.py`): services raise typed errors instead of
-  `HTTPException`; `app/main.py` maps them to *generic* HTTP responses via registered exception
-  handlers, keeping the service layer free of FastAPI imports and keeping internal detail out of
-  client-facing error bodies.
-- **pydantic-settings for config**: a single typed `Settings` object (`app/core/config.py`),
-  cached via `lru_cache`, is the only way the app reads environment variables. Secret fields are
-  `SecretStr` with no default, so a missing `.env` fails startup instead of running insecurely.
-- **SQLite-in-memory for tests, Postgres for runtime**: trades perfect DB parity for fast, fully
-  isolated, dependency-free unit/integration tests. Given the actual query surface (no
-  Postgres-only SQL features used), this is an acceptable tradeoff within the challenge's time
-  box.
-- **Multi-stage Dockerfile**: `uv sync` runs in a builder stage; the runtime image copies only the
-  built virtualenv and app code, and drops to a non-root user.
-- **Redis for refresh-token rotation + access-token revocation** (`app/services/token_service.py`):
-  TTL-keyed allowlist/blacklist entries self-expire, no cleanup job needed; chosen over a Postgres
-  table since the data is inherently TTL-shaped and read on every authenticated request. See
-  ADR-006.
+```
+app/
+  api/            # FastAPI routers, versioned under v1/, HTTP concerns only
+    v1/           # one router module per resource + router.py aggregator
+    dependencies.py  # shared FastAPI Depends() wiring (DB session, services)
+  schemas/        # Pydantic v2 models (request/response DTOs, validation)
+  services/       # Business logic, framework-agnostic; exceptions.py for domain errors
+  repositories/   # Data-access layer, one class per aggregate, wraps AsyncSession queries
+  models/         # SQLAlchemy 2.0 async ORM models
+  core/           # config.py (pydantic-settings), database.py (lazy engine/session/Base),
+                   # security.py (bcrypt + JWT), rate_limit.py (slowapi Limiter),
+                   # exceptions.py, logging.py, middleware.py (request-id + security headers)
+alembic/          # migrations (async env.py, versions/) — connects with the DDL-capable
+                   # migrator role, decoupled from app/core/config.Settings
+db/init/          # one-shot SQL/shell scripts that provision least-privilege Postgres roles
+                   # on first cluster init (see docker-compose.yml's `db` service)
+tests/            # pytest, mirrors app/ structure (api/, services/, repositories/, core/)
+```
+
+Full ADR-formatted rationale (context, chosen option, tradeoffs) for these and other decisions
+lives in [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md), following the standard in
+`.claude/rules/adr-standards.md`.
 
 ## 🔒 Security Audit & Compliance
 
@@ -160,7 +168,7 @@ Implemented, mapped to the request:
 - **Security headers on every response** (`app/core/middleware.py`): `Content-Security-Policy`,
   `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
   `Permissions-Policy`, `Strict-Transport-Security` (assumes TLS termination in front of this
-  app — see Pendientes).
+  app).
 - **Locked-down CORS.** `Settings` rejects a wildcard `cors_origins` at startup; the app also sets
   `allow_credentials=False` since bearer-token auth carries no cookies, and restricts
   methods/headers to what the API actually uses.
@@ -192,26 +200,10 @@ Out of scope for the 4-6h time box, in rough priority order:
 
 - CI/CD (GitHub Actions): lint, type-check, test on PR; build/push image on merge to `main`;
   container vulnerability scanning (Trivy/Grype) as a required check.
-- TLS termination: this app assumes a reverse proxy/ingress (nginx, Traefik, cloud LB) terminates
-  TLS 1.3 in front of it; the HSTS header is already set, but there's no in-app TLS.
-- OAuth2 + PKCE / delegating to an external IdP (Keycloak, Auth0, Cognito) for anything beyond
-  first-party password login — e.g. third-party/public clients, SSO. Building a spec-compliant
-  authorization server in-house wasn't justified for this challenge's scope; the JWT
-  resource-server + RBAC implemented here is the right-sized baseline and the natural seam to
-  swap in an external IdP later (verify tokens from that IdP instead of issuing our own).
 - Secrets manager integration (Vault/AWS Secrets Manager/Azure Key Vault) for non-local
   environments, replacing `.env` files.
-- Structured/JSON logging + request tracing correlated with the `X-Request-ID` header already
-  emitted by `app/core/middleware.py`; ship logs somewhere that can't be tampered with locally.
 - Metrics/observability (Prometheus `/metrics`, OpenTelemetry traces).
 - Pagination metadata (total count, next/prev cursors) on `GET /v1/tasks` — currently offset/limit
   only, no envelope.
-- Postgres-parity test tier (real Postgres via testcontainers) to complement the SQLite unit tests
-  for anything that becomes Postgres-specific.
 - Soft delete / audit trail on `TaskModel` and `UserModel` if the domain needs history instead of
   hard deletes.
-- Distributed rate-limit storage — `slowapi`'s default in-memory storage doesn't share state
-  across multiple API replicas; Redis is already a runtime dependency (token revocation), so
-  pointing `slowapi` at it is the natural next step.
-- "Log out everywhere" / per-device session revocation — only one active refresh token is
-  tracked per issuance; there's no way to revoke all of a user's sessions by user id.
