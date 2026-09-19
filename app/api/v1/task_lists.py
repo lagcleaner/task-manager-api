@@ -149,6 +149,7 @@ async def list_tasks_for_task_list(
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+        status.HTTP_409_CONFLICT: {"model": ErrorResponse},
     },
 )
 async def invite_to_task_list(
@@ -159,3 +160,24 @@ async def invite_to_task_list(
 ) -> InvitationRead:
     invitation = await service.send_task_list_invitation(list_id, data.email, invited_by_id=user.id)
     return InvitationRead.model_validate(invitation)
+
+
+@router.get(
+    "/{list_id}/invitations",
+    response_model=list[InvitationRead],
+    status_code=status.HTTP_200_OK,
+    summary="List invitations for a task list",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def list_invitations_for_task_list(
+    service: NotificationServiceDep,
+    _user: CurrentUser,
+    list_id: int = Path(..., ge=1, description="Task list identifier"),
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    limit: int = Query(default=100, ge=1, le=500, description="Page size"),
+) -> list[InvitationRead]:
+    invitations = await service.list_invitations(list_id, offset=offset, limit=limit)
+    return [InvitationRead.model_validate(invitation) for invitation in invitations]
