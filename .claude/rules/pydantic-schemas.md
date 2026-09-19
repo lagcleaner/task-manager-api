@@ -18,6 +18,8 @@ Rules for Pydantic v2 models under `app/schemas/`.
 - Every field with a constraint, default, or documentation need uses `Field(...)`: `Field(..., min_length=1, max_length=200, description="...")`, not a bare annotation with a raw default.
 - No ambiguous primitives: don't type an amount of money, a duration, or an identifier as a bare `int`/`str`/`float` if a more specific type exists or can be expressed with `Annotated` + constraints. Use `EmailStr`, `AnyUrl`, `UUID`, `Literal[...]`, or an `Enum` instead of a loose `str` when the domain has a fixed vocabulary.
 - Use `Literal` or `Enum` for status/kind fields (e.g. task status) — never a free-form string that's actually a closed set.
+- Any field carrying a secret or credential (a password, a token) is `pydantic.SecretStr`, not `str` — so it never gets printed in a repr, log line, or unhandled-exception traceback. Unwrap it with `.get_secret_value()` only at the point of use.
+- A schema never has a field that echoes a secret back out (no `password` field on a `*Read` schema, ever).
 
 ## Validators
 

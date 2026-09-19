@@ -18,6 +18,8 @@ Rules for FastAPI routers under `app/api/`.
 - Request bodies are always a Pydantic schema from `app/schemas/`, never a raw `dict` or loose `**kwargs`.
 - Declare `response_model` on every route (or the return type annotation, if using FastAPI's inference) using the `*Read` schema — never return an ORM model instance directly.
 - Routers call into `app/services/`; they must not contain query logic, business rules, or direct DB session manipulation beyond passing the session/dependency through.
+- Any endpoint touching non-public data depends on `CurrentUser` (any authenticated user) or `AdminUser` (RBAC-gated) from `app/api/dependencies.py`. Adding an endpoint without one of these is an explicit, deliberate choice (e.g. `/v1/health`, `/v1/auth/register`, `/v1/auth/login`) — never an oversight.
+- Auth endpoints (`/v1/auth/*`) are decorated with `@limiter.limit(...)` from `app/core/rate_limit.py` to slow down credential stuffing/brute force.
 
 ## Errors
 

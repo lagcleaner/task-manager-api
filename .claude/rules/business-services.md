@@ -14,8 +14,8 @@ Rules for business logic under `app/services/`.
 
 ## Domain exceptions
 
-- Define explicit exception classes per failure mode in `app/services/exceptions.py` (or per-module), e.g. `TaskNotFoundError`, `TaskAlreadyCompletedError`, subclassing a common `DomainError` base — never a bare `Exception` or `ValueError` for expected failure paths.
-- Exception classes carry the context needed to build a response (e.g. the offending `task_id`) as attributes, not just a message string.
+- Define explicit exception classes per failure mode in `app/services/exceptions.py` (or per-module), e.g. `TaskNotFoundError`, `AuthenticationError`, `AuthorizationError`, `InvalidCredentialsError`, `EmailAlreadyRegisteredError`, subclassing a common `DomainError` base — never a bare `Exception` or `ValueError` for expected failure paths.
+- Exception classes carry the context needed to build a response (e.g. the offending `task_id`) as attributes, not just a message string — except where that context is itself sensitive (`InvalidCredentialsError` deliberately carries no email/reason, so `app/main.py` can't accidentally leak which part of a login attempt failed).
 
 ## Structure
 
