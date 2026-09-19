@@ -348,3 +348,42 @@ with a comment, matching the same trade-off already made for `TaskUpdate`/`TaskS
   `title`/`list_id` in that schema, not just `priority` — a narrower fix (a `field_validator` or a
   `BeforeValidator` on just `priority`) was available but not taken, to stay consistent with the
   existing `TaskUpdate`/`TaskStatusUpdate` convention in this codebase.
+
+## ADR-011: Task Assignment (`assignee_id` FK + Dedicated Assign Endpoint)
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+Caso de uso b.iii (bonus) pide asignar un usuario responsable a cada tarea. `TaskModel` no tenía
+ninguna referencia a `users`, y no existía forma de comunicar "sin asignar" de forma explícita
+frente a "no toqué este campo" en una actualización parcial.
+
+### Opción Elegida y Justificación
+
+Se añadió `assignee_id: Mapped[int | None]` a `TaskModel` como FK nullable a `users.id`, con
+relationship `assignee` (`lazy="selectin"`, sin `back_populates` porque `UserModel` no necesita
+navegar hacia sus tareas asignadas todavía). `TaskCreate`/`TaskUpdate` ganaron un `assignee_id`
+opcional para asignar en el mismo request de creación/edición, y se agregó `TaskAssigneeUpdate`
+(campo `assignee_id: int | None`, requerido pero nullable) más el endpoint dedicado
+`PATCH /v1/tasks/{id}/assignee`, siguiendo el mismo patrón que `TaskStatusUpdate` +
+`PATCH /tasks/{id}/status`: un campo requerido-pero-nullable obliga al caller a decir
+explícitamente "desasignar" (`null`) en vez de que una omisión ambigua se confunda con "no
+cambiar". La validación de que el usuario exista vive en `TaskService` (`_ensure_user_exists`,
+reutilizado por `create_task`, `update_task` y el nuevo `assign_task`), lanzando `UserNotFoundError`
+(nuevo, mapeado a 404 en `app/main.py`) — nunca una violación de FK sin manejar. `TaskRead` expone
+`assignee_id` como entero plano, igual que `list_id`, sin anidar un `UserRead`, por consistencia
+con el resto del esquema y para no acoplar el contrato de tareas al de usuarios.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** un usuario responsable por tarea es verificable end-to-end (unit tests en
+  `TaskService` + tests de integración en `PATCH /tasks/{id}/assignee`); `assign_task` como método
+  nombrado (no un `setattr` genérico) deja espacio para reglas de negocio futuras (p. ej. notificar
+  al asignado) sin tocar `update_task`.
+- **Negativas (-):** no hay restricción de que el usuario asignado pertenezca a la misma
+  organización/lista que la tarea (el modelo no tiene ese concepto aún), así que cualquier usuario
+  registrado puede ser asignado a cualquier tarea; aceptable dado el alcance actual de la app.
+  Tampoco se agregó notificación (real o ficticia) al asignar — eso es el caso de uso b.iv,
+  fuera del alcance de este ADR.

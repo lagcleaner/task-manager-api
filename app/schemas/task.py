@@ -15,6 +15,7 @@ class TaskCreate(BaseModel):
     )
     list_id: int = Field(..., gt=0, description="Parent task list id")
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Task priority")
+    assignee_id: int | None = Field(default=None, gt=0, description="Responsible user id")
 
 
 class TaskUpdate(BaseModel):
@@ -25,6 +26,7 @@ class TaskUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     status: TaskStatus | None = Field(default=None)
     priority: TaskPriority | None = Field(default=None)
+    assignee_id: int | None = Field(default=None, gt=0, description="Responsible user id")
 
 
 class TaskStatusUpdate(BaseModel):
@@ -32,6 +34,12 @@ class TaskStatusUpdate(BaseModel):
     model_config = ConfigDict(strict=False)
 
     status: TaskStatus = Field(..., description="New task status")
+
+
+class TaskAssigneeUpdate(BaseModel):
+    assignee_id: int | None = Field(
+        ..., description="User id to assign as responsible, or null to unassign"
+    )
 
 
 class TaskRead(BaseModel):
@@ -43,5 +51,6 @@ class TaskRead(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     list_id: int
+    assignee_id: int | None
     created_at: datetime
     updated_at: datetime

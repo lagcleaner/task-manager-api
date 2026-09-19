@@ -117,6 +117,59 @@ async def test_change_task_status_returns_404_when_missing(client: AsyncClient) 
     assert response.json()["detail"]["code"] == "task_not_found"
 
 
+async def test_assign_task_returns_200(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "assigner@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    created = await client.post(
+        "/v1/tasks", json={"title": "Ship feature", "list_id": list_id}, headers=headers
+    )
+    task_id = created.json()["id"]
+    result = await client.post(
+        "/v1/auth/register", json={"email": "assignee@example.com", "password": _PASSWORD}
+    )
+    assignee_id = result.json()["id"]
+
+    response = await client.patch(
+        f"/v1/tasks/{task_id}/assignee", json={"assignee_id": assignee_id}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["assignee_id"] == assignee_id
+
+
+async def test_assign_task_returns_404_when_task_missing(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "assigner-missing-task@example.com")
+
+    response = await client.patch(
+        "/v1/tasks/999/assignee", json={"assignee_id": None}, headers=headers
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "task_not_found"
+
+
+async def test_assign_task_returns_404_when_user_missing(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "assigner-missing-user@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    created = await client.post(
+        "/v1/tasks", json={"title": "Ship feature", "list_id": list_id}, headers=headers
+    )
+    task_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/v1/tasks/{task_id}/assignee", json={"assignee_id": 999}, headers=headers
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "user_not_found"
+
+
+async def test_assign_task_requires_authentication(client: AsyncClient) -> None:
+    response = await client.patch("/v1/tasks/1/assignee", json={"assignee_id": None})
+
+    assert response.status_code == 401
+
+
 async def test_delete_task_as_regular_user_returns_403(client: AsyncClient) -> None:
     headers = await _register_and_login(client, "regular@example.com")
     list_id = await _create_task_list(client, headers, "Groceries")
