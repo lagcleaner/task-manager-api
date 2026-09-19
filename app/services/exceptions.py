@@ -20,6 +20,13 @@ class UserNotFoundError(DomainError):
         super().__init__(f"User {user_id} not found")
 
 
+class DuplicateInvitationError(DomainError):
+    def __init__(self, list_id: int, email: str) -> None:
+        self.list_id = list_id
+        self.email = email
+        super().__init__(f"Invitation for {email} to list {list_id} already exists")
+
+
 class EmailAlreadyRegisteredError(DomainError):
     def __init__(self, email: str) -> None:
         self.email = email

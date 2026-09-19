@@ -16,6 +16,7 @@ from app.services.exceptions import (
     AuthenticationError,
     AuthorizationError,
     DomainError,
+    DuplicateInvitationError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
@@ -80,6 +81,15 @@ async def email_already_registered_handler(
 ) -> JSONResponse:
     return JSONResponse(
         _error("email_already_registered", str(exc)), status_code=status.HTTP_409_CONFLICT
+    )
+
+
+@app.exception_handler(DuplicateInvitationError)
+async def duplicate_invitation_handler(
+    request: Request, exc: DuplicateInvitationError
+) -> JSONResponse:
+    return JSONResponse(
+        _error("duplicate_invitation", str(exc)), status_code=status.HTTP_409_CONFLICT
     )
 
 
