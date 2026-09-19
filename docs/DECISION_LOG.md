@@ -266,3 +266,47 @@ needed.
   The `NOT NULL` add-column migration would need a backfill step (default list per owner, or a
   nullable column with a follow-up migration) before running against a real deployment with
   existing task rows; that's acceptable only because none exists yet.
+
+## ADR-009: Task Priority Field + Filtered List-Scoped Listing with Completion Percentage
+
+**Status:** Aceptado
+**Fecha:** 2026-09-18
+
+### Contexto y Problema
+
+Use case a.iv requires listing a task list's tasks with optional `status`/`priority` filters plus
+a completion-percentage figure. `TaskModel` had no `priority` column yet, and there was no
+endpoint scoping task listing to a single list.
+
+### Opción Elegida y Justificación
+
+Added `TaskPriority(enum.StrEnum)` (`LOW`/`MEDIUM`/`HIGH`) and a `priority` column on `TaskModel`,
+mirroring `status`'s existing `Enum(..., native_enum=False, length=20)` pattern exactly, default
+`MEDIUM`, `NOT NULL`. Added `GET /v1/task-lists/{list_id}/tasks` (in `app/api/v1/task_lists.py`,
+not `tasks.py`, since it's "list a list's tasks" not a generic task query) returning
+`TaskListTasksRead { tasks: list[TaskRead], completion_percentage: float }`. `TaskListService.list_tasks`
+computes `completion_percentage` at request time — `completed / total * 100` over **all** tasks in
+the list, rounded to 1 decimal, `0.0` when the list is empty — deliberately not stored/denormalized
+on `TaskListModel`, so it can never drift from the actual task rows, and deliberately computed
+over the *whole* list rather than the filtered subset the caller asked for, since filtering by
+status/priority would otherwise skew the percentage into a meaningless number. `TaskRepository`
+gained `list_by_list_id` (filtered, single-table `select`) and `count_all_and_completed` (two
+`select(func.count())` queries) to keep query logic out of the service per the repository rules.
+While implementing this, found and fixed a pre-existing bug: `TaskCreate.priority` (added here)
+couldn't be set via the API at all under `TaskCreate`'s `strict=True` config, since Pydantic's
+strict mode rejects a JSON string for an `Enum` field; switched `TaskCreate` to `strict=False`
+with a comment, matching the same trade-off already made for `TaskUpdate`/`TaskStatusUpdate`.
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** filtered listing and completion percentage are both testable in isolation
+  (`TaskRepository`/`TaskListService` unit tests) without spinning up the full HTTP stack;
+  `completion_percentage` staying unfiltered-by-design is covered by a dedicated test so a future
+  change can't silently couple it to the filter params again.
+- **Negativas (-):** `completion_percentage` costs two extra `COUNT` queries per request (on top
+  of the filtered `SELECT`) since it isn't cached/denormalized; acceptable at this data scale, but
+  would need revisiting (e.g. a materialized counter maintained on status change) if list sizes or
+  request volume grow significantly. `TaskCreate` losing `strict=True` also loosens validation on
+  `title`/`list_id` in that schema, not just `priority` — a narrower fix (a `field_validator` or a
+  `BeforeValidator` on just `priority`) was available but not taken, to stay consistent with the
+  existing `TaskUpdate`/`TaskStatusUpdate` convention in this codebase.

@@ -17,7 +17,12 @@ class TaskService:
         task_list = await self._task_list_repository.get_by_id(data.list_id)
         if task_list is None:
             raise TaskListNotFoundError(data.list_id)
-        task = TaskModel(title=data.title, description=data.description, list_id=data.list_id)
+        task = TaskModel(
+            title=data.title,
+            description=data.description,
+            list_id=data.list_id,
+            priority=data.priority,
+        )
         task = await self._repository.add(task)
         await self._session.commit()
         return task

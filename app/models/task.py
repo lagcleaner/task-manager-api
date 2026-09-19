@@ -17,6 +17,12 @@ class TaskStatus(enum.StrEnum):
     COMPLETED = "completed"
 
 
+class TaskPriority(enum.StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class TaskModel(Base):
     __tablename__ = "tasks"
 
@@ -26,6 +32,11 @@ class TaskModel(Base):
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus, native_enum=False, length=20),
         default=TaskStatus.PENDING,
+        nullable=False,
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        Enum(TaskPriority, native_enum=False, length=20),
+        default=TaskPriority.MEDIUM,
         nullable=False,
     )
     list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)

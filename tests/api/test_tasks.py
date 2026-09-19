@@ -38,6 +38,7 @@ async def test_create_task_returns_201(client: AsyncClient) -> None:
     body = response.json()
     assert body["title"] == "Write tests"
     assert body["status"] == "pending"
+    assert body["priority"] == "medium"
     assert body["list_id"] == list_id
 
 

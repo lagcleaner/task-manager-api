@@ -2,17 +2,19 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.task import TaskStatus
+from app.models.task import TaskPriority, TaskStatus
 
 
 class TaskCreate(BaseModel):
-    model_config = ConfigDict(strict=True)
+    # strict mode disabled: priority arrives as a JSON string and needs coercion into TaskPriority
+    model_config = ConfigDict(strict=False)
 
     title: str = Field(..., min_length=1, max_length=200, description="Task title")
     description: str | None = Field(
         default=None, max_length=2000, description="Optional task description"
     )
     list_id: int = Field(..., gt=0, description="Parent task list id")
+    priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Task priority")
 
 
 class TaskUpdate(BaseModel):
@@ -22,6 +24,7 @@ class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     status: TaskStatus | None = Field(default=None)
+    priority: TaskPriority | None = Field(default=None)
 
 
 class TaskStatusUpdate(BaseModel):
@@ -38,6 +41,7 @@ class TaskRead(BaseModel):
     title: str
     description: str | None
     status: TaskStatus
+    priority: TaskPriority
     list_id: int
     created_at: datetime
     updated_at: datetime
