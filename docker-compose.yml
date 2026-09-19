@@ -28,6 +28,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      # Entrypoint starts as root and drops privileges to the `postgres`
+      # user via setuid/setgid before starting the server.
+      - SETUID
+      - SETGID
 
   # One-shot job: applies migrations with the DDL-capable migrator role, then
   # exits. Kept out of the long-running `api` container so the migrator
