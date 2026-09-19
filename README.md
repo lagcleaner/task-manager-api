@@ -18,6 +18,15 @@ Clean Architecture Task Management API built with Python and FastAPI.
 ## Quickstart (Docker)
 
 ```bash
+make local-run
+```
+
+This generates a `.env` with freshly random secrets (if one doesn't already exist —
+`scripts/generate_env.sh` never overwrites one) and brings up the full stack.
+
+Or, to generate the secrets yourself:
+
+```bash
 cp .env.example .env
 # Generate three DIFFERENT secrets and one JWT key, then edit .env:
 openssl rand -base64 24   # -> POSTGRES_SUPERUSER_PASSWORD
@@ -34,7 +43,7 @@ services: `db` (Postgres 16, provisions least-privilege roles on first boot via
 `db/init/001_create_roles.sh`), `redis` (7-alpine, password-protected — backs refresh-token
 rotation and access-token revocation), `migrate` (one-shot `alembic upgrade head` using the
 DDL-capable migrator role, then exits), and `api` (the long-running server, using only the
-DML-only app role).
+DML-only app role). Stop the stack with `make down`.
 
 ## Quickstart (local, no Docker)
 
