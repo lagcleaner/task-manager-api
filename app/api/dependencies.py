@@ -13,6 +13,7 @@ from app.models.user import UserModel, UserRole
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
 from app.services.exceptions import AuthenticationError, AuthorizationError, RevokedTokenError
+from app.services.notification_service import NotificationService
 from app.services.task_list_service import TaskListService
 from app.services.task_service import TaskService
 from app.services.token_service import TokenService
@@ -34,6 +35,13 @@ async def get_task_list_service(session: DbSession) -> AsyncGenerator[TaskListSe
 
 
 TaskListServiceDep = Annotated[TaskListService, Depends(get_task_list_service)]
+
+
+async def get_notification_service(session: DbSession) -> AsyncGenerator[NotificationService]:
+    yield NotificationService(session)
+
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 
 
 RedisDep = Annotated[Redis, Depends(get_redis_client)]

@@ -1,0 +1,48 @@
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.task_list import TaskListModel
+from app.models.user import UserModel, UserRole
+from app.services.exceptions import TaskListNotFoundError
+from app.services.notification_service import NotificationService
+
+
+async def _create_user(session: AsyncSession, email: str) -> UserModel:
+    user = UserModel(email=email, hashed_password="not-a-real-hash", role=UserRole.USER)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def _create_task_list(session: AsyncSession, owner_id: int) -> TaskListModel:
+    task_list = TaskListModel(name="Groceries", owner_id=owner_id)
+    session.add(task_list)
+    await session.commit()
+    await session.refresh(task_list)
+    return task_list
+
+
+async def test_send_task_list_invitation_persists_invitation(db_session: AsyncSession) -> None:
+    owner = await _create_user(db_session, "owner@example.com")
+    task_list = await _create_task_list(db_session, owner.id)
+    service = NotificationService(db_session)
+
+    invitation = await service.send_task_list_invitation(
+        task_list.id, "invitee@example.com", invited_by_id=owner.id
+    )
+
+    assert invitation.id is not None
+    assert invitation.list_id == task_list.id
+    assert invitation.email == "invitee@example.com"
+    assert invitation.invited_by_id == owner.id
+
+
+async def test_send_task_list_invitation_raises_when_list_missing(
+    db_session: AsyncSession,
+) -> None:
+    owner = await _create_user(db_session, "owner@example.com")
+    service = NotificationService(db_session)
+
+    with pytest.raises(TaskListNotFoundError):
+        await service.send_task_list_invitation(999, "invitee@example.com", invited_by_id=owner.id)

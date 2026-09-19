@@ -229,3 +229,43 @@ async def test_list_tasks_for_task_list_returns_404_when_list_missing(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "task_list_not_found"
+
+
+async def test_invite_to_task_list_requires_authentication(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "inviter-noauth@example.com")
+    list_id = await _create_task_list(client, headers, "Invitable")
+
+    response = await client.post(
+        f"/v1/task-lists/{list_id}/invitations", json={"email": "invitee@example.com"}
+    )
+
+    assert response.status_code == 401
+
+
+async def test_invite_to_task_list_returns_201(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "inviter@example.com")
+    list_id = await _create_task_list(client, headers, "Invitable")
+
+    response = await client.post(
+        f"/v1/task-lists/{list_id}/invitations",
+        json={"email": "invitee@example.com"},
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["list_id"] == list_id
+    assert body["email"] == "invitee@example.com"
+    assert body["invited_by_id"] is not None
+    assert body["id"] is not None
+
+
+async def test_invite_to_task_list_returns_404_when_list_missing(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "inviter-missing@example.com")
+
+    response = await client.post(
+        "/v1/task-lists/999/invitations", json={"email": "invitee@example.com"}, headers=headers
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "task_list_not_found"

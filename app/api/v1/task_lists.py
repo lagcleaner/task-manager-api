@@ -2,9 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, status
 
-from app.api.dependencies import AdminUser, CurrentUser, TaskListServiceDep
+from app.api.dependencies import AdminUser, CurrentUser, NotificationServiceDep, TaskListServiceDep
 from app.models.task import TaskPriority, TaskStatus
 from app.schemas.common import ErrorResponse
+from app.schemas.invitation import InvitationCreate, InvitationRead
 from app.schemas.task import TaskRead
 from app.schemas.task_list import TaskListCreate, TaskListRead, TaskListTasksRead, TaskListUpdate
 
@@ -134,3 +135,27 @@ async def list_tasks_for_task_list(
         tasks=[TaskRead.model_validate(task) for task in tasks],
         completion_percentage=completion_percentage,
     )
+
+
+@router.post(
+    "/{list_id}/invitations",
+    response_model=InvitationRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Send a fake invitation email",
+    description=(
+        "Simulates inviting a user to collaborate on this task list by email. This is a "
+        "fake notification: no real email is sent, the invitation is only logged and persisted."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def invite_to_task_list(
+    data: InvitationCreate,
+    service: NotificationServiceDep,
+    user: CurrentUser,
+    list_id: int = Path(..., ge=1, description="Task list identifier"),
+) -> InvitationRead:
+    invitation = await service.send_task_list_invitation(list_id, data.email, invited_by_id=user.id)
+    return InvitationRead.model_validate(invitation)
