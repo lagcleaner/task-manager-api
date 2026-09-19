@@ -431,3 +431,47 @@ una corrección de algo roto.
   POST o consultando la base de datos directamente. Al no haber restricción de ownership sobre
   quién puede invitar a una lista, cualquier usuario autenticado puede invitar a cualquier email
   a cualquier lista existente; mismo trade-off ya aceptado en el resto de `task_lists.py`.
+
+## ADR-013: Invitation Uniqueness + Read-Back Listing
+
+**Status:** Aceptado
+**Fecha:** 2026-09-19
+
+### Contexto y Problema
+
+Revisión de ADR-012 encontró dos huecos: (1) nada impedía invitar el mismo email a la misma
+lista un número ilimitado de veces (sin unique constraint en `(list_id, email)`), y (2) las
+invitaciones se podían crear pero no leer de vuelta — escritura de una sola vía, sin forma de
+auditarlas vía API.
+
+### Opción Elegida y Justificación
+
+Para (1): se agregó `UniqueConstraint("list_id", "email", name="uq_invitations_list_id_email")`
+en `InvitationModel` más la migración correspondiente, y en el servicio un chequeo explícito
+`InvitationRepository.exists_for_list_and_email` antes de insertar, que levanta
+`DuplicateInvitationError` (nueva, mapeada a 409) en vez de dejar que una violación del
+constraint de la base de datos se propague como un error genérico. El constraint de base de
+datos se mantiene como respaldo (defensa en profundidad) para el caso de una condición de
+carrera entre el chequeo y el insert — el chequeo en el servicio es lo que da un error de
+dominio limpio en el camino normal, no lo único que garantiza unicidad.
+
+Para (2): se agregó `GET /v1/task-lists/{id}/invitations` (mismo patrón de paginación y
+autorización que `GET /{id}/tasks`), respaldado por `InvitationRepository.list_by_list_id` y
+`NotificationService.list_invitations` (valida que la lista exista, igual que el resto de
+métodos de este servicio).
+
+### Tradeoffs y Consecuencias
+
+- **Positivas (+):** el chequeo en servicio produce un 409 con `code: duplicate_invitation`
+  legible por el cliente, en vez de un 500 por `IntegrityError` sin capturar; el constraint de
+  base de datos cubre la ventana de carrera que el chequeo por sí solo no puede cerrar. El nuevo
+  GET hace que ADR-012 deje de ser una escritura de una sola vía, sin ampliar el alcance de
+  autorización (mismo nivel `CurrentUser` que el resto de `task_lists.py`, consistente con la
+  decisión ya tomada en ADR-012).
+- **Negativas (-):** el chequeo de duplicados es "leer luego escribir", no atómico; bajo
+  concurrencia alta dos requests simultáneos para el mismo `(list_id, email)` podrían ambos
+  pasar el chequeo y competir en el insert — en ese caso, uno de los dos vería un
+  `IntegrityError` sin capturar, que no es `DomainError` y por lo tanto cae en el handler
+  catch-all de `Exception` (500 genérico) en vez de un 409 limpio. Aceptable al volumen de esta
+  app; una solución completa envolvería el insert en un `try/except IntegrityError` además del
+  chequeo.
