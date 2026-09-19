@@ -77,6 +77,47 @@ flake8/black/isort — running all four would fight over the same job). Never in
 `python`/`pytest`/`ruff` directly; always go through `uv run <cmd>` (or `make`) so the
 project's `.venv` is used.
 
+## Code quality and git hooks
+
+Quality gate runs via [pre-commit](https://pre-commit.com), config in `.pre-commit-config.yaml`.
+
+```bash
+make hooks-install   # one-time, per clone: installs the pre-commit + pre-push hooks
+```
+
+On every `git commit`:
+
+| Hook | Does |
+|------|------|
+| `ruff-check` | `ruff check --fix` — lint + auto-fix, includes import sort (`I` rule) |
+| `ruff-format` | `ruff format` — auto-format |
+| `mypy` | `mypy app` — strict type check |
+| `check-yaml` / `check-json` | Syntax validation |
+| `check-added-large-files` | Blocks files over 1000 KB |
+| `trailing-whitespace` / `end-of-file-fixer` | Auto-fix whitespace |
+| `no-commit-to-branch` | Blocks direct commits to `main` |
+
+On every `git push`: `pytest -m "not slow"` (fast unit tests only, so pushes stay quick).
+
+Run the full suite manually without committing:
+
+```bash
+make hooks-run        # uv run pre-commit run --all-files
+```
+
+Skip hooks in exceptional cases (e.g. a WIP commit on a feature branch) with:
+
+```bash
+git commit --no-verify
+git push --no-verify
+```
+
+Use sparingly — CI runs the same lint/type/test checks and will fail regardless.
+
+This repo standardizes on `ruff` for lint + format + import sort (it replaces
+flake8/black/isort — running all four would fight over the same job); don't add those tools
+back via pre-commit or otherwise.
+
 ## Adding or updating a dependency
 
 ```bash

@@ -42,8 +42,23 @@ Auth: JWT bearer tokens (`app/core/security.py`), issued by `POST /v1/auth/login
 - Type check: `uv run mypy app`
 - Create a migration: `uv run alembic revision --autogenerate -m "message"`
 - Apply migrations: `uv run alembic upgrade head`
+- Install git hooks: `make hooks-install`
+- Run all pre-commit hooks manually: `make hooks-run`
 
 Always use `uv run <cmd>` instead of invoking `python`/`pytest`/`ruff` directly, so the project's virtualenv is used.
+
+## Git hooks (pre-commit)
+
+`.pre-commit-config.yaml` runs on every commit: `ruff check --fix`, `ruff format`, `mypy app`,
+plus generic checks (YAML/JSON syntax, trailing whitespace, large files, no direct commits to
+`main`). `pytest -m "not slow"` runs on `pre-push`, not on commit. Every Python hook runs via
+`language: system` + `uv run`, so it uses the project's own venv — no separate hook envs, no
+version drift from `uv.lock`.
+
+Ruff replaces flake8/black/isort here (see DEVELOPMENT.md) — don't add those tools; they'd fight
+ruff over the same job. Before finishing a task that touches `app/`, `tests/`, or config files,
+run `make hooks-run` (or `uv run pre-commit run --files <paths>`) so failures surface before the
+user commits, not after.
 
 ## Naming conventions
 
