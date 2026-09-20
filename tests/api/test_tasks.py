@@ -20,6 +20,16 @@ async def _create_task_list(client: AsyncClient, headers: dict[str, str], name: 
     return list_id
 
 
+async def _create_task(
+    client: AsyncClient, headers: dict[str, str], list_id: int, title: str
+) -> int:
+    response = await client.post(
+        "/v1/tasks", json={"title": title, "list_id": list_id}, headers=headers
+    )
+    task_id: int = response.json()["id"]
+    return task_id
+
+
 async def test_create_task_requires_authentication(client: AsyncClient) -> None:
     response = await client.post("/v1/tasks", json={"title": "Write tests", "list_id": 1})
 
@@ -170,30 +180,7 @@ async def test_assign_task_requires_authentication(client: AsyncClient) -> None:
     assert response.status_code == 401
 
 
-async def test_delete_task_as_regular_user_returns_403(client: AsyncClient) -> None:
-    headers = await _register_and_login(client, "regular@example.com")
-    list_id = await _create_task_list(client, headers, "Groceries")
-    created = await client.post(
-        "/v1/tasks", json={"title": "Temp", "list_id": list_id}, headers=headers
-    )
-    task_id = created.json()["id"]
-
-    response = await client.delete(f"/v1/tasks/{task_id}", headers=headers)
-
-    assert response.status_code == 403
-
-
-async def test_delete_task_as_admin_returns_204(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    email = "admin@example.com"
-    headers = await _register_and_login(client, email)
-    list_id = await _create_task_list(client, headers, "Groceries")
-    created = await client.post(
-        "/v1/tasks", json={"title": "Temp", "list_id": list_id}, headers=headers
-    )
-    task_id = created.json()["id"]
-
+async def _promote_to_admin(db_session: AsyncSession, email: str) -> None:
     # Registration never grants admin; promote directly in the store, the way
     # a real deployment would via an internal tool, not a self-service endpoint.
     result = await db_session.execute(select(UserModel).where(UserModel.email == email))
@@ -201,6 +188,159 @@ async def test_delete_task_as_admin_returns_204(
     user.role = UserRole.ADMIN
     await db_session.commit()
 
+
+async def test_delete_task_as_owner_returns_204(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "owner@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+
     response = await client.delete(f"/v1/tasks/{task_id}", headers=headers)
 
     assert response.status_code == 204
+    get_response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
+    assert get_response.status_code == 404
+
+
+async def test_delete_task_as_regular_user_returns_403(client: AsyncClient) -> None:
+    owner_headers = await _register_and_login(client, "owner2@example.com")
+    list_id = await _create_task_list(client, owner_headers, "Groceries")
+    task_id = await _create_task(client, owner_headers, list_id, "Temp")
+    other_headers = await _register_and_login(client, "regular@example.com")
+
+    response = await client.delete(f"/v1/tasks/{task_id}", headers=other_headers)
+
+    assert response.status_code == 403
+
+
+async def test_delete_task_as_assignee_non_owner_returns_403(client: AsyncClient) -> None:
+    owner_headers = await _register_and_login(client, "owner3@example.com")
+    list_id = await _create_task_list(client, owner_headers, "Groceries")
+    task_id = await _create_task(client, owner_headers, list_id, "Temp")
+    registered = await client.post(
+        "/v1/auth/register", json={"email": "assignee@example.com", "password": _PASSWORD}
+    )
+    assignee_id = registered.json()["id"]
+    await client.patch(
+        f"/v1/tasks/{task_id}/assignee", json={"assignee_id": assignee_id}, headers=owner_headers
+    )
+    login = await client.post(
+        "/v1/auth/login", json={"email": "assignee@example.com", "password": _PASSWORD}
+    )
+    assignee_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # Being the assignee doesn't grant delete rights — only the owning list's owner has them.
+    response = await client.delete(f"/v1/tasks/{task_id}", headers=assignee_headers)
+
+    assert response.status_code == 403
+
+
+async def test_delete_task_requires_authentication(client: AsyncClient) -> None:
+    response = await client.delete("/v1/tasks/1")
+
+    assert response.status_code == 401
+
+
+async def test_delete_task_as_admin_non_owner_returns_403(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    owner_headers = await _register_and_login(client, "owner6@example.com")
+    list_id = await _create_task_list(client, owner_headers, "Groceries")
+    task_id = await _create_task(client, owner_headers, list_id, "Temp")
+    admin_email = "admin-nonowner@example.com"
+    admin_headers = await _register_and_login(client, admin_email)
+    await _promote_to_admin(db_session, admin_email)
+
+    # The regular (non-permanent) DELETE route is ownership-gated even for admins —
+    # only /permanent bypasses ownership. Admin role must not implicitly grant it.
+    response = await client.delete(f"/v1/tasks/{task_id}", headers=admin_headers)
+
+    assert response.status_code == 403
+
+
+async def test_permanent_delete_task_as_admin_returns_204(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    email = "admin@example.com"
+    headers = await _register_and_login(client, email)
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+    await _promote_to_admin(db_session, email)
+
+    response = await client.delete(f"/v1/tasks/{task_id}/permanent", headers=headers)
+
+    assert response.status_code == 204
+
+
+async def test_permanent_delete_task_as_admin_works_on_already_soft_deleted_task(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    email = "admin2@example.com"
+    headers = await _register_and_login(client, email)
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+    await client.delete(f"/v1/tasks/{task_id}", headers=headers)
+    await _promote_to_admin(db_session, email)
+
+    response = await client.delete(f"/v1/tasks/{task_id}/permanent", headers=headers)
+
+    assert response.status_code == 204
+
+
+async def test_permanent_delete_task_as_non_admin_returns_403(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "notadmin@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+
+    response = await client.delete(f"/v1/tasks/{task_id}/permanent", headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_get_deleted_tasks_as_admin_returns_soft_deleted_tasks(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    email = "admin3@example.com"
+    headers = await _register_and_login(client, email)
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+    await client.delete(f"/v1/tasks/{task_id}", headers=headers)
+    await _promote_to_admin(db_session, email)
+
+    response = await client.get("/v1/tasks/deleted", headers=headers)
+
+    assert response.status_code == 200
+    assert [task["id"] for task in response.json()] == [task_id]
+
+
+async def test_get_deleted_tasks_as_non_admin_returns_403(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "notadmin2@example.com")
+
+    response = await client.get("/v1/tasks/deleted", headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_get_task_returns_404_after_soft_delete(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "owner4@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    task_id = await _create_task(client, headers, list_id, "Temp")
+    await client.delete(f"/v1/tasks/{task_id}", headers=headers)
+
+    response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
+
+    assert response.status_code == 404
+
+
+async def test_list_tasks_excludes_soft_deleted_tasks(client: AsyncClient) -> None:
+    headers = await _register_and_login(client, "owner5@example.com")
+    list_id = await _create_task_list(client, headers, "Groceries")
+    kept_id = await _create_task(client, headers, list_id, "Kept")
+    removed_id = await _create_task(client, headers, list_id, "Removed")
+    await client.delete(f"/v1/tasks/{removed_id}", headers=headers)
+
+    response = await client.get("/v1/tasks", headers=headers)
+
+    assert response.status_code == 200
+    task_ids = [task["id"] for task in response.json()]
+    assert kept_id in task_ids
+    assert removed_id not in task_ids
