@@ -554,3 +554,35 @@ makes both machine-enforced in CI too.
   jobs), a fixed cost accepted for the enforcement gained. The 85% floor is a static number, not
   auto-tightened as coverage grows — a slow drift from ~95% toward 85% would still pass CI; revisiting
   the threshold periodically is a manual follow-up, not automated here.
+
+## ADR-016: Redis-Backed Rate Limiter Storage
+
+**Status:** Accepted
+**Date:** 2026-09-20
+
+### Context and Problem
+
+`app/core/rate_limit.py` built `Limiter` with no `storage_uri`, so slowapi defaulted to
+in-memory counters. Each API replica then tracks its own independent count, so under N
+replicas the effective rate limit becomes N times the configured value — a correctness bug
+once the API scales beyond a single replica, not just a performance concern.
+
+### Chosen Option and Justification
+
+`Limiter` now receives `storage_uri` built from the same `Settings` Redis fields
+(`redis_host`, `redis_port`, `redis_db`, `redis_password`) already used by
+`app/core/redis.py` for `TokenService`'s revocation list, giving one shared counter across
+replicas with no new infrastructure. The password, when set, is unwrapped via
+`.get_secret_value()` only inline while building the URI string in a local helper
+(`_build_storage_uri`), matching the existing pattern in `app/core/redis.py` — never assigned
+to a variable that outlives that construction step, logged, or exposed in an exception.
+
+### Trade-offs and Consequences
+
+- **Positive (+):** rate limits are now enforced correctly across horizontally-scaled
+  replicas instead of silently multiplying per-pod; no new Redis instance, connection pool, or
+  client wrapper introduced — reuses the connection details already in `Settings`.
+- **Negative (-):** slowapi manages its own synchronous Redis connection built from the URI,
+  separate from the app's `redis.asyncio` client used by `TokenService` — two independent
+  connections to the same Redis instance rather than a shared client. Deliberate simplicity
+  trade-off (slowapi doesn't support handing it an existing async client), not an oversight.
