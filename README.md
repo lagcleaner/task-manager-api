@@ -198,8 +198,8 @@ Implemented, mapped to the request:
 
 Out of scope for this project at the moment, in rough priority order:
 
-- CI/CD (GitHub Actions): lint, type-check, test on PR; build/push image on merge to `main`;
-  container vulnerability scanning (Trivy/Grype) as a required check.
+- CI/CD (GitHub Actions): build/push image on merge to `main`.
+- Container vulnerability scanning (Trivy/Grype) as a required check.
 - Secrets manager integration (Vault/AWS Secrets Manager/Azure Key Vault) for non-local
   environments, replacing `.env` files.
 - Metrics/observability (Prometheus `/metrics`, OpenTelemetry traces).
