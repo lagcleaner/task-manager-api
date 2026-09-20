@@ -6,7 +6,23 @@ stack the way a real client would. These are **not** part of `uv run pytest` (`t
 ["tests"]` in `pyproject.toml` excludes this directory) and are not wired into pre-commit or
 CI — run them manually, on demand.
 
-## Prerequisites
+## Running (automatic, local stack)
+
+```bash
+make e2e                              # all four flows, admin steps included
+scripts/e2e/run.sh scripts/e2e/test_tasks_flow.py -v   # args pass through to pytest
+```
+
+`scripts/e2e/run.sh` starts the docker compose stack (`docker compose up --build -d`),
+waits for `GET /v1/health`, provisions a fixed e2e admin account (register + promote via
+`docker compose exec db psql`, same as the manual steps below), then runs
+`uv run pytest scripts/e2e --no-cov` with `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD` set, so
+every admin-gated step runs instead of skipping. Idempotent — safe to re-run. Leaves the
+stack running afterward (same as `make local-run`); set `E2E_DOWN_AFTER=1` to tear it down
+when the run finishes. Only targets the local compose stack — see the script's header
+comment if pointing `E2E_BASE_URL` somewhere else.
+
+## Running (manual)
 
 The stack must already be running:
 
@@ -16,15 +32,14 @@ docker compose up --build   # or: make local-run
 
 API reachable at `http://localhost:8000` by default (health check: `GET /v1/health`).
 
-## Running
-
 ```bash
 uv run pytest scripts/e2e --no-cov              # all four flows
 uv run pytest scripts/e2e/test_auth_flow.py --no-cov   # a single flow
 ```
 
 `--no-cov` skips coverage collection (`pyproject.toml`'s `addopts` enables it by default,
-which isn't meaningful for scripts that don't import `app`).
+which isn't meaningful for scripts that don't import `app`). Without `E2E_ADMIN_EMAIL`/
+`E2E_ADMIN_PASSWORD` set (see Configuration below), admin-gated steps skip.
 
 ## Configuration
 
@@ -46,7 +61,8 @@ which isn't meaningful for scripts that don't import `app`).
   cleanup) at the admin-gated step — reruns stay safe, but soft-deleted task lists/tasks
   accumulate in the target DB until an admin account is provisioned.
 
-To provision a local admin account for this:
+Use `make e2e` / `scripts/e2e/run.sh` (see above) to get this done automatically. To
+provision a local admin account by hand instead:
 
 ```bash
 # 1. register a normal user via the API (or reuse one), then promote it directly in Postgres:
