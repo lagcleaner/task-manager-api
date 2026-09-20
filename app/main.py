@@ -1,17 +1,16 @@
 import logging
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import request_id_middleware, security_headers_middleware
-from app.core.rate_limit import limiter
+from app.core.rate_limit import default_rate_limit_dependency, limiter
 from app.services.exceptions import (
     AuthenticationError,
     AuthorizationError,
@@ -38,7 +37,6 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
-app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,7 +49,11 @@ app.add_middleware(
 app.middleware("http")(security_headers_middleware)
 app.middleware("http")(request_id_middleware)
 
-app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.include_router(
+    api_router,
+    prefix=settings.api_v1_prefix,
+    dependencies=[Depends(default_rate_limit_dependency)],
+)
 
 
 def _error(code: str, message: str) -> dict[str, dict[str, str]]:
