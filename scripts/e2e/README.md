@@ -33,15 +33,18 @@ which isn't meaningful for scripts that don't import `app`).
   localhost/loopback/a private network host. Without it, a non-dev-looking `E2E_BASE_URL`
   (e.g. a public hostname) is refused at collection time — this is meant to make it hard to
   accidentally run destructive, data-creating scripts against a real environment.
-- `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` — optional. `DELETE /v1/tasks/{id}` and
-  `DELETE /v1/task-lists/{id}` require the `admin` role, and this API has no self-service
-  promotion endpoint (see the main `README.md`'s API flow section — promote a user via a
-  direct DB write). Set both to a pre-provisioned admin account's credentials to exercise the
-  delete/404 steps in `test_tasks_flow.py` and `test_task_lists_flow.py`, and to let those
-  scripts (plus `test_invitations_flow.py`) actually delete the task list they created.
-  Without them, those flows still run everything they can and `pytest.skip` at the
-  admin-gated step, and cleanup best-effort no-ops — reruns stay safe, but created task
-  lists/tasks accumulate in the target DB until an admin account is provisioned.
+- `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` — optional. The plain `DELETE /v1/tasks/{id}` and
+  `DELETE /v1/task-lists/{id}` routes are self-service soft-delete (owner-only) and don't
+  need admin. `DELETE /v1/tasks/{id}/permanent`, `DELETE /v1/task-lists/{id}/permanent`,
+  `GET /v1/tasks/deleted`, and `GET /v1/task-lists/deleted` do require the `admin` role, and
+  this API has no self-service promotion endpoint (see the main `README.md`'s API flow
+  section — promote a user via a direct DB write). Set both to a pre-provisioned admin
+  account's credentials to exercise `test_task_lists_flow.py`'s admin-only tail
+  (deleted-listing + permanent hard-delete) and to let it and `test_tasks_flow.py` actually
+  hard-delete the task list they created, instead of leaving it soft-deleted. Without them,
+  those flows still run everything else and `pytest.skip` (or fall back to soft-delete-only
+  cleanup) at the admin-gated step — reruns stay safe, but soft-deleted task lists/tasks
+  accumulate in the target DB until an admin account is provisioned.
 
 To provision a local admin account for this:
 
@@ -56,10 +59,11 @@ docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
 - `test_auth_flow.py` — register -> login -> use access token -> refresh (rotation
   verified) -> logout -> access token rejected after logout, plus a duplicate-registration
   failure path. Stays comfortably under the `10/minute` `rate_limit_auth` budget.
-- `test_tasks_flow.py` — create task list -> create/list/get/update/change-status/assign/
-  delete task -> verify 404.
+- `test_tasks_flow.py` — create task list -> create/list/get/update/change-status/assign
+  task -> owner soft-deletes task -> verify 404.
 - `test_task_lists_flow.py` — create/list/get/update task list -> list its tasks filtered by
-  status and priority -> delete -> verify 404.
+  status and priority -> owner soft-deletes list -> verify 404 -> (admin) sees it in
+  `GET /v1/task-lists/deleted` -> admin hard-deletes via `/permanent`.
 - `test_invitations_flow.py` — create task list -> invite a unique email -> list invitations
   -> verify it appears.
 

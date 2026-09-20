@@ -1,13 +1,15 @@
 """Manual e2e flow: create task list -> create task -> list tasks -> get task ->
-update task -> change status -> assign task -> delete task -> verify 404. Cleans up
-the task list it created (which cascade-deletes any task still on it).
+update task -> change status -> assign task -> owner soft-deletes the task -> verify
+404. Cleans up the task list it created (which cascade-soft-deletes any task still
+on it; hard-deleted for real if an admin account is available).
 
 Run: uv run pytest scripts/e2e/test_tasks_flow.py --no-cov (requires a live stack, see README.md).
 
-DELETE /v1/tasks/{id} requires the admin role (no self-service promotion endpoint exists —
-see README.md). The delete/404 step and the task-list cleanup both need E2E_ADMIN_EMAIL/
-E2E_ADMIN_PASSWORD set to a pre-provisioned admin account; without them this flow still
-exercises everything else and skips at that point instead of failing.
+DELETE /v1/tasks/{id} is self-service soft-delete, owner-only (resolved through the
+task's parent list) — no admin needed. Real cleanup of the task list (hard-delete via
+DELETE /v1/task-lists/{id}/permanent) needs E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD set to a
+pre-provisioned admin account; without them this flow still exercises everything else,
+and cleanup falls back to soft-deleting the list instead of failing.
 
 Uses the shared `actor` fixture (conftest.py) instead of registering its own user — see
 that fixture's docstring for why.
@@ -15,7 +17,6 @@ that fixture's docstring for why.
 
 from collections.abc import Callable
 
-import pytest
 from httpx import AsyncClient
 
 
@@ -78,20 +79,17 @@ async def test_create_list_use_update_assign_delete_task_flow(
         assert assign_response.status_code == 200
         assert assign_response.json()["assignee_id"] == user_id
 
-        if admin_headers is None:
-            pytest.skip(
-                "E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD not set: DELETE /v1/tasks/{id} requires "
-                "the admin role, which this API has no self-service way to grant. See "
-                "scripts/e2e/README.md."
-            )
-
-        # delete task
-        delete_response = await client.delete(f"/v1/tasks/{task_id}", headers=admin_headers)
+        # owner (via the parent list's ownership) soft-deletes the task
+        delete_response = await client.delete(f"/v1/tasks/{task_id}", headers=headers)
         assert delete_response.status_code == 204
 
-        # verify 404 after delete
+        # verify 404 after soft-delete
         after_delete_response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
         assert after_delete_response.status_code == 404
     finally:
         if admin_headers is not None:
-            await client.delete(f"/v1/task-lists/{list_id}", headers=admin_headers)
+            # Real cleanup: hard-delete the task list (and any remaining child rows).
+            await client.delete(f"/v1/task-lists/{list_id}/permanent", headers=admin_headers)
+        else:
+            # No admin available — at least soft-delete the list so it stops showing up.
+            await client.delete(f"/v1/task-lists/{list_id}", headers=headers)

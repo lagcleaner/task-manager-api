@@ -4,9 +4,9 @@ invitations for the list -> verify the invited email appears. Cleans up the task
 Run: uv run pytest scripts/e2e/test_invitations_flow.py --no-cov (requires a live stack,
 see README.md).
 
-Cleanup (DELETE /v1/task-lists/{id}) requires the admin role, so it only runs when
-E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD are set to a pre-provisioned admin account — see
-README.md. The invite/list steps this file actually tests don't need admin at all.
+Cleanup (DELETE /v1/task-lists/{id}) is self-service soft-delete, owner-only — no admin
+needed, and always runs. The invite/list steps this file actually tests don't need admin
+at all either; `admin_headers` is unused here now.
 
 Uses the shared `actor` fixture (conftest.py) as the inviter instead of registering its own
 user — see that fixture's docstring for why. The invited email still comes from
@@ -22,7 +22,6 @@ async def test_invite_and_list_invitations_flow(
     client: AsyncClient,
     unique_email: Callable[[str], str],
     unique_title: Callable[[str], str],
-    admin_headers: dict[str, str] | None,
     actor: tuple[dict[str, str], str],
 ) -> None:
     headers, _user_id = actor
@@ -53,5 +52,4 @@ async def test_invite_and_list_invitations_flow(
         invited_emails = {item["email"] for item in list_invitations_response.json()}
         assert invited_email in invited_emails
     finally:
-        if admin_headers is not None:
-            await client.delete(f"/v1/task-lists/{list_id}", headers=admin_headers)
+        await client.delete(f"/v1/task-lists/{list_id}", headers=headers)

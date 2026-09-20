@@ -89,10 +89,13 @@ def unique_title() -> UniqueValueFactory:
 async def admin_headers(client: AsyncClient) -> dict[str, str] | None:
     """Bearer headers for a pre-provisioned admin account, or None if unavailable.
 
-    `DELETE /v1/tasks/{id}` and `DELETE /v1/task-lists/{id}` require the admin role, and this
+    `DELETE /v1/tasks/{id}/permanent`, `DELETE /v1/task-lists/{id}/permanent`,
+    `GET /v1/tasks/deleted`, and `GET /v1/task-lists/deleted` require the admin role, and this
     API has no self-service promotion endpoint (see README.md: "promote via a direct DB write").
-    Set E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD to a pre-provisioned admin account's credentials to
-    exercise those steps; flows that need them skip (not fail) when the vars are unset.
+    The plain `DELETE /v1/tasks/{id}` / `DELETE /v1/task-lists/{id}` routes are self-service
+    soft-delete now (owner-only) and don't need this fixture. Set E2E_ADMIN_EMAIL/
+    E2E_ADMIN_PASSWORD to a pre-provisioned admin account's credentials to exercise the
+    admin-only steps; flows that need them skip (not fail) when the vars are unset.
     """
     global _admin_headers_cache
     if _admin_headers_cache is not None:

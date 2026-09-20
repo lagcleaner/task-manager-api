@@ -1,14 +1,16 @@
 """Manual e2e flow: create task list -> list task lists -> get task list -> update
-task list -> list its tasks with status/priority filters -> delete task list ->
-verify 404.
+task list -> list its tasks with status/priority filters -> owner soft-deletes the list
+-> verify 404 -> (if admin available) admin sees it in GET /v1/task-lists/deleted and
+hard-deletes it via DELETE /v1/task-lists/{id}/permanent.
 
 Run: uv run pytest scripts/e2e/test_task_lists_flow.py --no-cov (requires a live stack,
 see README.md).
 
-DELETE /v1/task-lists/{id} requires the admin role (no self-service promotion endpoint
-exists — see README.md). The delete/404 step needs E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD set
-to a pre-provisioned admin account; without them this flow still exercises everything else
-and skips at that point instead of failing, leaving the created list behind.
+DELETE /v1/task-lists/{id} is self-service soft-delete, owner-only — no admin needed.
+The admin-only tail (deleted-listing + permanent hard-delete) needs E2E_ADMIN_EMAIL/
+E2E_ADMIN_PASSWORD set to a pre-provisioned admin account; without them this flow still
+exercises everything else including the soft-delete/404 step, and only that tail is
+skipped, leaving the (soft-deleted, already invisible) list behind.
 
 Uses the shared `actor` fixture (conftest.py) instead of registering its own user — see
 that fixture's docstring for why.
@@ -90,22 +92,43 @@ async def test_create_list_update_filter_tasks_delete_flow(
         priority_filtered_ids = [item["id"] for item in priority_filtered.json()["tasks"]]
         assert priority_filtered_ids == [high_priority_id]
 
-        if admin_headers is None:
-            pytest.skip(
-                "E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD not set: DELETE /v1/task-lists/{id} "
-                "requires the admin role, which this API has no self-service way to grant. "
-                "See scripts/e2e/README.md."
-            )
-
-        # delete task list
-        delete_response = await client.delete(f"/v1/task-lists/{list_id}", headers=admin_headers)
+        # owner soft-deletes the task list (self-service, no admin needed)
+        delete_response = await client.delete(f"/v1/task-lists/{list_id}", headers=headers)
         assert delete_response.status_code == 204
 
-        # verify 404 after delete
+        # verify 404 after soft-delete
         after_delete_response = await client.get(f"/v1/task-lists/{list_id}", headers=headers)
         assert after_delete_response.status_code == 404
+
+        if admin_headers is None:
+            pytest.skip(
+                "E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD not set: GET /v1/task-lists/deleted and "
+                "DELETE /v1/task-lists/{id}/permanent require the admin role, which this API "
+                "has no self-service way to grant. See scripts/e2e/README.md. The soft-deleted "
+                "list is left behind (already invisible to non-admin callers)."
+            )
+
+        # admin sees the soft-deleted list
+        deleted_response = await client.get("/v1/task-lists/deleted", headers=admin_headers)
+        assert deleted_response.status_code == 200
+        assert any(item["id"] == list_id for item in deleted_response.json())
+
+        # admin permanently hard-deletes it
+        permanent_response = await client.delete(
+            f"/v1/task-lists/{list_id}/permanent", headers=admin_headers
+        )
+        assert permanent_response.status_code == 204
+
+        # gone from the deleted-listing too, now that it's hard-deleted
+        deleted_after_response = await client.get("/v1/task-lists/deleted", headers=admin_headers)
+        assert deleted_after_response.status_code == 200
+        assert not any(item["id"] == list_id for item in deleted_after_response.json())
     finally:
         if admin_headers is not None:
-            # Best-effort: no-op (404) if the try block already deleted it, so reruns stay
-            # idempotent regardless of where an earlier assertion failed.
-            await client.delete(f"/v1/task-lists/{list_id}", headers=admin_headers)
+            # Best-effort: no-op (404) if the try block already hard-deleted it, so reruns
+            # stay idempotent regardless of where an earlier assertion failed.
+            await client.delete(f"/v1/task-lists/{list_id}/permanent", headers=admin_headers)
+        else:
+            # No admin available for a real cleanup — at least soft-delete so the list stops
+            # showing up in normal listings. No-op (404) if the try block already did this.
+            await client.delete(f"/v1/task-lists/{list_id}", headers=headers)
