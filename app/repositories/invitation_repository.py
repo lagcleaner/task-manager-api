@@ -1,4 +1,6 @@
-from sqlalchemy import func, select
+from datetime import UTC, datetime
+
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.invitation import InvitationModel
@@ -32,3 +34,13 @@ class InvitationRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def soft_delete_by_list_id(self, list_id: int) -> None:
+        """Cascade soft-delete: mark every active invitation for a list as deleted."""
+        now = datetime.now(UTC).replace(tzinfo=None)
+        await self._session.execute(
+            update(InvitationModel)
+            .where(InvitationModel.list_id == list_id, InvitationModel.deleted_at.is_(None))
+            .values(deleted_at=now)
+        )
+        await self._session.flush()
