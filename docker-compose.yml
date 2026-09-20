@@ -29,12 +29,8 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      # Entrypoint starts as root: on a fresh (root-owned) named volume it
-      # must chown/chmod and `find` through /var/lib/postgresql/data to fix
-      # ownership before it drops privileges to the `postgres` user via
-      # setuid/setgid. CHOWN/FOWNER/DAC_OVERRIDE are required for that
-      # ownership fixup even as uid 0 once cap_drop: ALL strips them; do not
-      # trim these back to just SETUID/SETGID.
+      # Entrypoint starts as root and needs these to chown/chmod a fresh
+      # (root-owned) volume before dropping privileges to `postgres`.
       - SETUID
       - SETGID
       - CHOWN
