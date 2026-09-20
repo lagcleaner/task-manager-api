@@ -54,3 +54,13 @@ class AuthorizationError(DomainError):
     def __init__(self, required_role: str) -> None:
         self.required_role = required_role
         super().__init__(f"Requires role '{required_role}'")
+
+
+class NotOwnerError(DomainError):
+    """Raised when the current user isn't the owner of the resource they're acting on."""
+
+    def __init__(self, resource: str, resource_id: int, user_id: int) -> None:
+        self.resource = resource
+        self.resource_id = resource_id
+        self.user_id = user_id
+        super().__init__(f"User {user_id} is not the owner of {resource} {resource_id}")

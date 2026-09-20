@@ -6,7 +6,23 @@ stack the way a real client would. These are **not** part of `uv run pytest` (`t
 ["tests"]` in `pyproject.toml` excludes this directory) and are not wired into pre-commit or
 CI — run them manually, on demand.
 
-## Prerequisites
+## Running (automatic, local stack)
+
+```bash
+make e2e                              # all four flows, admin steps included
+scripts/e2e/run.sh scripts/e2e/test_tasks_flow.py -v   # args pass through to pytest
+```
+
+`scripts/e2e/run.sh` starts the docker compose stack (`docker compose up --build -d`),
+waits for `GET /v1/health`, provisions a fixed e2e admin account (register + promote via
+`docker compose exec db psql`, same as the manual steps below), then runs
+`uv run pytest scripts/e2e --no-cov` with `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD` set, so
+every admin-gated step runs instead of skipping. Idempotent — safe to re-run. Leaves the
+stack running afterward (same as `make local-run`); set `E2E_DOWN_AFTER=1` to tear it down
+when the run finishes. Only targets the local compose stack — see the script's header
+comment if pointing `E2E_BASE_URL` somewhere else.
+
+## Running (manual)
 
 The stack must already be running:
 
@@ -16,15 +32,14 @@ docker compose up --build   # or: make local-run
 
 API reachable at `http://localhost:8000` by default (health check: `GET /v1/health`).
 
-## Running
-
 ```bash
 uv run pytest scripts/e2e --no-cov              # all four flows
 uv run pytest scripts/e2e/test_auth_flow.py --no-cov   # a single flow
 ```
 
 `--no-cov` skips coverage collection (`pyproject.toml`'s `addopts` enables it by default,
-which isn't meaningful for scripts that don't import `app`).
+which isn't meaningful for scripts that don't import `app`). Without `E2E_ADMIN_EMAIL`/
+`E2E_ADMIN_PASSWORD` set (see Configuration below), admin-gated steps skip.
 
 ## Configuration
 
@@ -33,17 +48,21 @@ which isn't meaningful for scripts that don't import `app`).
   localhost/loopback/a private network host. Without it, a non-dev-looking `E2E_BASE_URL`
   (e.g. a public hostname) is refused at collection time — this is meant to make it hard to
   accidentally run destructive, data-creating scripts against a real environment.
-- `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` — optional. `DELETE /v1/tasks/{id}` and
-  `DELETE /v1/task-lists/{id}` require the `admin` role, and this API has no self-service
-  promotion endpoint (see the main `README.md`'s API flow section — promote a user via a
-  direct DB write). Set both to a pre-provisioned admin account's credentials to exercise the
-  delete/404 steps in `test_tasks_flow.py` and `test_task_lists_flow.py`, and to let those
-  scripts (plus `test_invitations_flow.py`) actually delete the task list they created.
-  Without them, those flows still run everything they can and `pytest.skip` at the
-  admin-gated step, and cleanup best-effort no-ops — reruns stay safe, but created task
-  lists/tasks accumulate in the target DB until an admin account is provisioned.
+- `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` — optional. The plain `DELETE /v1/tasks/{id}` and
+  `DELETE /v1/task-lists/{id}` routes are self-service soft-delete (owner-only) and don't
+  need admin. `DELETE /v1/tasks/{id}/permanent`, `DELETE /v1/task-lists/{id}/permanent`,
+  `GET /v1/tasks/deleted`, and `GET /v1/task-lists/deleted` do require the `admin` role, and
+  this API has no self-service promotion endpoint (see the main `README.md`'s API flow
+  section — promote a user via a direct DB write). Set both to a pre-provisioned admin
+  account's credentials to exercise `test_task_lists_flow.py`'s admin-only tail
+  (deleted-listing + permanent hard-delete) and to let it and `test_tasks_flow.py` actually
+  hard-delete the task list they created, instead of leaving it soft-deleted. Without them,
+  those flows still run everything else and `pytest.skip` (or fall back to soft-delete-only
+  cleanup) at the admin-gated step — reruns stay safe, but soft-deleted task lists/tasks
+  accumulate in the target DB until an admin account is provisioned.
 
-To provision a local admin account for this:
+Use `make e2e` / `scripts/e2e/run.sh` (see above) to get this done automatically. To
+provision a local admin account by hand instead:
 
 ```bash
 # 1. register a normal user via the API (or reuse one), then promote it directly in Postgres:
@@ -56,10 +75,14 @@ docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
 - `test_auth_flow.py` — register -> login -> use access token -> refresh (rotation
   verified) -> logout -> access token rejected after logout, plus a duplicate-registration
   failure path. Stays comfortably under the `10/minute` `rate_limit_auth` budget.
-- `test_tasks_flow.py` — create task list -> create/list/get/update/change-status/assign/
-  delete task -> verify 404.
+- `test_tasks_flow.py` — create task list -> create/list/get/update/change-status/assign
+  task -> owner soft-deletes task -> verify 404 -> (admin) sees it in
+  `GET /v1/tasks/deleted` -> admin hard-deletes via `/permanent` -> gone from the listing.
 - `test_task_lists_flow.py` — create/list/get/update task list -> list its tasks filtered by
-  status and priority -> delete -> verify 404.
+  status and priority -> owner soft-deletes list -> verify 404 -> (admin) sees it in
+  `GET /v1/task-lists/deleted`, confirms cascade soft-deleted its two tasks
+  (`GET /v1/tasks/deleted`) -> admin hard-deletes list via `/permanent` -> confirms cascade
+  hard-deleted the tasks too.
 - `test_invitations_flow.py` — create task list -> invite a unique email -> list invitations
   -> verify it appears.
 

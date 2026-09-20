@@ -19,6 +19,7 @@ from app.services.exceptions import (
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    NotOwnerError,
     RevokedTokenError,
     TaskListNotFoundError,
     TaskNotFoundError,
@@ -135,6 +136,13 @@ async def invalid_refresh_token_handler(
 
 @app.exception_handler(AuthorizationError)
 async def authorization_error_handler(request: Request, exc: AuthorizationError) -> JSONResponse:
+    return JSONResponse(
+        _error("forbidden", "Insufficient permissions"), status_code=status.HTTP_403_FORBIDDEN
+    )
+
+
+@app.exception_handler(NotOwnerError)
+async def not_owner_handler(request: Request, exc: NotOwnerError) -> JSONResponse:
     return JSONResponse(
         _error("forbidden", "Insufficient permissions"), status_code=status.HTTP_403_FORBIDDEN
     )

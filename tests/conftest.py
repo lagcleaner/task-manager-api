@@ -18,6 +18,16 @@ from app.core.database import Base, get_db_session  # noqa: E402
 from app.core.rate_limit import limiter  # noqa: E402
 from app.core.redis import get_redis_client  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models.user import UserModel, UserRole  # noqa: E402
+
+
+async def create_user(session: AsyncSession, email: str) -> UserModel:
+    """Shared factory helper for service-layer tests that need a persisted user."""
+    user = UserModel(email=email, hashed_password="not-a-real-hash", role=UserRole.USER)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 @pytest.fixture(autouse=True)

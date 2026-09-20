@@ -19,7 +19,9 @@ class NotificationService:
     async def send_task_list_invitation(
         self, list_id: int, email: str, invited_by_id: int
     ) -> InvitationModel:
-        task_list = await self._task_list_repository.get_by_id(list_id)
+        # Locked read: serializes against TaskListService.soft_delete_task_list's cascade,
+        # same reasoning as TaskService.create_task.
+        task_list = await self._task_list_repository.get_by_id(list_id, for_update=True)
         if task_list is None:
             raise TaskListNotFoundError(list_id)
 

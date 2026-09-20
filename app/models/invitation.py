@@ -20,6 +20,7 @@ class InvitationModel(Base):
     email: Mapped[str] = mapped_column(nullable=False)
     invited_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     task_list: Mapped["TaskListModel"] = relationship(back_populates="invitations", lazy="selectin")
     invited_by: Mapped["UserModel"] = relationship(lazy="selectin")

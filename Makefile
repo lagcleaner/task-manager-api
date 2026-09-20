@@ -1,4 +1,4 @@
-.PHONY: setup dev lint format test migrate migrate-new env local-run down hooks-install hooks-run
+.PHONY: setup dev lint format test migrate migrate-new env local-run down hooks-install hooks-run e2e
 
 setup: ## Create .venv and install all deps (incl. dev group)
 	uv sync
@@ -38,3 +38,6 @@ local-run: env ## Generate .env if needed, then build and start the full docker 
 
 down: ## Stop the local docker compose stack
 	docker compose down
+
+e2e: ## Run scripts/e2e against the local docker compose stack, auto-provisioning an admin
+	@bash scripts/e2e/run.sh

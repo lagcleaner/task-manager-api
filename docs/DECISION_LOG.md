@@ -586,3 +586,69 @@ to a variable that outlives that construction step, logged, or exposed in an exc
   separate from the app's `redis.asyncio` client used by `TokenService` — two independent
   connections to the same Redis instance rather than a shared client. Deliberate simplicity
   trade-off (slowapi doesn't support handing it an existing async client), not an oversight.
+
+## ADR-017: Soft-Delete for Tasks/Task Lists + First Ownership-Based Authorization Check
+
+**Status:** Accepted
+**Date:** 2026-09-20
+
+### Context and Problem
+
+`DELETE /v1/tasks/{id}` and `DELETE /v1/task-lists/{id}` both required `AdminUser` and issued a
+real SQL DELETE. No ownership check existed anywhere in the codebase — `TaskListModel.owner_id`
+was written on create but never read back for authorization (a gap already named in ADR-012).
+The task needed soft-delete to become the default behavior for regular users, gated by list
+ownership, with hard delete moved to a new admin-only path, while every existing read path had
+to keep excluding soft-deleted rows so a soft-deleted item 404s exactly like a real delete did
+before.
+
+### Chosen Option and Justification
+
+Added a nullable `deleted_at: datetime | None` column to `TaskModel`, `TaskListModel`, and
+`InvitationModel` (via `alembic revision --autogenerate`; `InvitationModel` needed the column
+too since the cascade requirement below sets it) — this also surfaced and fixed a pre-existing
+bug where `InvitationModel` was never imported in `app/models/__init__.py`, so Alembic's
+metadata never saw it and autogenerate would otherwise have emitted a `DROP TABLE invitations`.
+`TaskRepository`/`TaskListRepository`'s `get_by_id`/`list_all` (and `count_all_and_completed`,
+which feeds `TaskListService.list_tasks`'s completion percentage) now filter
+`deleted_at IS NULL` by default; a parallel `get_by_id_any` bypasses that filter for the
+hard-delete path, and `list_deleted` (`deleted_at IS NOT NULL`) backs the new admin
+`GET /deleted` endpoints. `DELETE /v1/tasks/{id}` and `DELETE /v1/task-lists/{id}` now depend on
+`CurrentUser` and call `soft_delete_task`/`soft_delete_task_list`, which re-read `owner_id` from
+the DB (task ownership resolves via `task.task_list.owner_id`, since tasks have no owner field
+of their own) and raise a new `NotOwnerError` (`app/services/exceptions.py`, mapped to 403 in
+`app/main.py`, its own handler rather than reusing role-shaped `AuthorizationError`) on mismatch
+— this is the first ownership-based authorization check in the codebase; assignees never get
+delete rights, matching the spec's non-goals. Soft-deleting a list cascades to its tasks and
+invitations (`TaskRepository.soft_delete_by_list_id` / `InvitationRepository.soft_delete_by_list_id`,
+single-table bulk `UPDATE`s orchestrated from `TaskListService.soft_delete_task_list`, keeping
+cross-table orchestration in the service layer per the repository rules), mirroring the existing
+`cascade="all, delete-orphan"` hard-delete semantics. New `DELETE /{id}/permanent` routes
+(`AdminUser`-gated) call renamed `permanent_delete_task`/`permanent_delete_task_list`, which fetch
+via `get_by_id_any` and issue the real SQL DELETE — deliberately allowed on an active item with no
+forced soft-delete-first step, since the admin role is already re-verified by the `AdminUser`
+dependency. New `GET /deleted` routes (`AdminUser`-gated) are registered before their `/{id}`
+sibling routes in both routers so the literal `deleted` segment isn't shadowed by the variable
+path segment — verified directly against the running stack (`docker compose up --build`), not
+just by inspecting route order in source.
+
+### Trade-offs and Consequences
+
+- **Positive (+):** verified end-to-end against the full Docker stack: non-owner soft-delete
+  returns 403, owner soft-delete returns 204 and the row's `deleted_at` is set with no DELETE
+  issued, a soft-deleted task/list 404s for regular users and disappears from list endpoints,
+  soft-deleting a list cascades `deleted_at` onto its tasks and invitations, admin permanent-delete
+  removes the row from the DB on both an active and an already soft-deleted item, and
+  `GET /deleted` is admin-only and correctly unshadowed by `/{id}`. The `InvitationModel`
+  metadata-registration bug is fixed as a side effect, closing a latent risk that any future
+  autogenerate run against `invitations` would have silently proposed dropping the table.
+- **Negative (-):** no restore/undelete endpoint (explicit non-goal); `NotOwnerError` and
+  `AuthorizationError` both map to the same generic 403 body by design (zero-leak policy), so a
+  caller can't distinguish "wrong role" from "not the owner" from the response alone. Cascade
+  soft-delete of tasks/invitations runs as a bulk `UPDATE` separate from the list's own row
+  update, so it isn't a single-statement operation — acceptable since it's already wrapped in one
+  DB transaction via the service's single `commit()`, matching how the rest of this codebase
+  handles multi-step writes. `InvitationRepository.list_by_list_id` was deliberately left
+  unfiltered by `deleted_at`, since the only path to it already 404s once the parent list is
+  soft-deleted (`get_task_list` runs first); revisit if a direct invitation-listing path is ever
+  added.
