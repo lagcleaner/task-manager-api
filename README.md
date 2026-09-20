@@ -83,7 +83,9 @@ Manual, opt-in e2e scripts that drive a real running stack over HTTP also exist 
    (7 days), returned in the JSON body.
 4. `POST /v1/task-lists`, `GET /v1/task-lists`, `GET /v1/task-lists/{id}`,
    `PATCH /v1/task-lists/{id}` — create/list/get/update task lists (`CurrentUser`).
-   `DELETE /v1/task-lists/{id}` requires the `admin` role.
+   `DELETE /v1/task-lists/{id}` soft-deletes the list (owner-only, cascades to its tasks and
+   invitations); `DELETE /v1/task-lists/{id}/permanent` and `GET /v1/task-lists/deleted` are
+   admin-only. See ADR-017.
 5. `GET /v1/task-lists/{id}/tasks` — list a task list's tasks, filterable by `status`/`priority`,
    with a `completion_percentage` computed over the unfiltered set (`CurrentUser`).
 6. `POST /v1/task-lists/{id}/invitations`, `GET /v1/task-lists/{id}/invitations` — send/list fake
@@ -92,8 +94,11 @@ Manual, opt-in e2e scripts that drive a real running stack over HTTP also exist 
 7. `POST /v1/tasks`, `GET /v1/tasks`, `GET /v1/tasks/{id}`, `PATCH /v1/tasks/{id}`,
    `PATCH /v1/tasks/{id}/status`, `PATCH /v1/tasks/{id}/assignee` — create/list/get/update a task,
    change its status, and (re)assign or unassign it (`assignee_id: null`) (`CurrentUser`).
-   `DELETE /v1/tasks/{id}` requires the `admin` role (there's no self-service promotion endpoint
-   by design — promote via a direct DB write or a future internal admin tool).
+   `DELETE /v1/tasks/{id}` soft-deletes the task (only the owning list's owner may delete it,
+   resolved via `task.task_list.owner_id` — assignees get no delete rights);
+   `DELETE /v1/tasks/{id}/permanent` and `GET /v1/tasks/deleted` are admin-only (there's no
+   self-service promotion endpoint by design — promote via a direct DB write or a future internal
+   admin tool). See ADR-017.
 8. `POST /v1/auth/refresh` with `{"refresh_token": "..."}` — exchanges it for a new pair and
    rotates the refresh token; the presented one is invalidated immediately, so reusing it (replay)
    is rejected.
@@ -153,8 +158,10 @@ Implemented, mapped to the request:
   HS256, 15 min default expiry) carrying only the subject (+ `jti`/`type`) — never a role, so
   authorization (`require_role` in `app/api/dependencies.py`) always re-reads the current role
   from the database and a demoted/deleted user's still-valid token stops working immediately.
-  Every `/v1/tasks*` route requires `CurrentUser`; `DELETE /v1/tasks/{id}` additionally requires
-  `AdminUser`.
+  Every `/v1/tasks*` route requires `CurrentUser`; the ownership check on
+  `DELETE /v1/tasks/{id}` and `DELETE /v1/task-lists/{id}` (owner-only, re-read from the DB, not
+  trusted from the token) is the first ownership-based authorization in the codebase.
+  `.../permanent` and `.../deleted` routes additionally require `AdminUser`. See ADR-017.
 - **Refresh-token rotation + revocation list (Redis).** Refresh tokens (7-day default) are
   single-use: `POST /v1/auth/refresh` deletes the presented token's Redis allowlist entry and
   issues a new pair, so replaying an already-rotated refresh token is rejected
@@ -208,5 +215,5 @@ Out of scope for this project at the moment, in rough priority order:
 - Metrics/observability (Prometheus `/metrics`, OpenTelemetry traces).
 - Pagination metadata (total count, next/prev cursors) on `GET /v1/tasks` — currently offset/limit
   only, no envelope.
-- Soft delete / audit trail on `TaskModel` and `UserModel` if the domain needs history instead of
-  hard deletes.
+- `TaskModel`/`TaskListModel` gained soft delete (ADR-017); no restore/undelete endpoint and no
+  audit trail (who/when) yet. `UserModel` still has no soft delete.
