@@ -49,3 +49,26 @@ async def test_soft_delete_by_list_id_only_touches_active_rows(db_session: Async
     stored = result.scalar_one()
 
     assert stored.deleted_at is not None
+
+
+async def test_add_succeeds_when_reinviting_same_email_after_soft_delete(
+    db_session: AsyncSession,
+) -> None:
+    """ADR-018 regression: re-inviting the same email to the same list after the prior
+    invitation was soft-deleted (cancel/decline path) must not hit the old table-wide
+    unique constraint on (list_id, email)."""
+    task_list = await _create_task_list(db_session)
+    invitation = await _create_invitation(db_session, task_list.id, "one@example.com")
+    repository = InvitationRepository(db_session)
+    await repository.soft_delete_by_list_id(task_list.id)
+    await db_session.refresh(invitation)
+    assert invitation.deleted_at is not None
+
+    reinvitation = await repository.add(
+        InvitationModel(list_id=task_list.id, email="one@example.com", invited_by_id=1)
+    )
+    await db_session.commit()
+
+    assert reinvitation.id is not None
+    assert reinvitation.id != invitation.id
+    assert reinvitation.deleted_at is None

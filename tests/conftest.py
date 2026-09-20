@@ -43,8 +43,25 @@ def _reset_rate_limiter() -> None:
     limiter._limiter.storage = fresh_storage
 
 
+def _mirror_postgres_partial_indexes_for_sqlite() -> None:
+    """SQLAlchemy only honors `postgresql_where` when compiling DDL for the postgres
+    dialect; a partial unique index defined that way (e.g. `InvitationModel`'s
+    `uq_invitations_list_id_email_active`, see ADR-018) silently becomes a table-wide,
+    non-partial index under sqlite -- this suite's in-memory test-DB dialect. The app is
+    Postgres-only in production, but tests run against sqlite for speed, so mirror the
+    postgres partial-index condition as `sqlite_where` too (sqlite supports partial
+    indexes natively) to keep test-DB constraint semantics faithful to production.
+    """
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            pg_where = index.dialect_options["postgresql"]["where"]
+            if pg_where is not None:
+                index.dialect_options["sqlite"]["where"] = pg_where
+
+
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession]:
+    _mirror_postgres_partial_indexes_for_sqlite()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
