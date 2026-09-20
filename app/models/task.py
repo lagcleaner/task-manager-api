@@ -44,6 +44,7 @@ class TaskModel(Base):
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     task_list: Mapped["TaskListModel"] = relationship(back_populates="tasks", lazy="selectin")
     assignee: Mapped["UserModel | None"] = relationship(lazy="selectin")

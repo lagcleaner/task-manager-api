@@ -20,6 +20,7 @@ class TaskListModel(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     tasks: Mapped[list["TaskModel"]] = relationship(
         back_populates="task_list", cascade="all, delete-orphan", lazy="selectin"
