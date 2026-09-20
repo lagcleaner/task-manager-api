@@ -60,7 +60,7 @@ Audit section of `README.md` for the least-privilege role split).
 
 ## ADR-003: Testing Strategy and Coverage (pytest + httpx AsyncClient, SQLite for tests)
 
-**Status:** Accepted
+**Status:** Superseded
 **Date:** 2026-09-18
 
 ### Context and Problem
@@ -84,8 +84,11 @@ and zero external dependencies within a 4-6h box.
   dependencies) rather than calling service functions directly.
 - **Negative (-):** SQLite/Postgres parity is not guaranteed — a future Postgres-only feature
   (e.g. a Postgres-specific type or extension) would need its own Postgres-backed test tier
-  (tracked as a Pendiente in `README.md`). The >75% coverage target is not currently enforced by
-  a `--cov-fail-under` gate; it's tracked by convention only, not blocked in CI.
+  (tracked as a Pendiente in `README.md`). ~~The >75% coverage target is not currently enforced by
+  a `--cov-fail-under` gate; it's tracked by convention only, not blocked in CI.~~ Resolved by
+  ADR-015 (coverage-enforcement sub-decision only — the pytest/httpx/SQLite test strategy
+  described above is still current): `--cov-fail-under=85` now gates CI's `test` job invocation
+  specifically, not global `pytest` `addopts`, so local single-test runs stay unaffected.
 
 ## ADR-004: Code Quality Pipeline (ruff + mypy + pre-commit; CI/CD deferred)
 
@@ -197,7 +200,7 @@ and CORS runs with `allow_credentials=False`.
 
 ## ADR-007: CI Pipeline (GitHub Actions: Security Audit, Lint, Format, Test)
 
-**Status:** Accepted
+**Status:** Superseded
 **Date:** 2026-09-18
 
 ### Context and Problem
@@ -228,10 +231,13 @@ into CI.
 - **Positive (+):** every PR to `main` gets the same lint/format/test/dependency-audit gate
   regardless of whether the contributor installed local hooks; failures surface per-concern in the
   PR checks UI; no new pinned dev dependency to maintain.
-- **Negative (-):** `mypy --strict` still only runs locally via pre-commit, so a type error can
-  reach `main` if hooks are bypassed; no container image build/vulnerability scan or deploy step
-  yet (still tracked in `README.md`'s Pendientes); tests run against SQLite/`fakeredis` in CI, the
-  same as locally, so a Postgres- or Redis-specific behavior gap would not be caught here.
+- **Negative (-):** ~~`mypy --strict` still only runs locally via pre-commit, so a type error can
+  reach `main` if hooks are bypassed~~ Resolved by ADR-015 (mypy-in-CI sub-decision only — the
+  security/lint/format/test job structure described above is still current): a dedicated `mypy`
+  CI job now runs `uv run mypy app` on every push/PR. No container image build/vulnerability scan
+  or deploy step yet (still tracked in `README.md`'s Pendientes); tests run against
+  SQLite/`fakeredis` in CI, the same as locally, so a Postgres- or Redis-specific behavior gap
+  would not be caught here.
 
 ## ADR-008: Task List Aggregate (`TaskListModel`, owner-scoped)
 
@@ -506,3 +512,45 @@ README as an alternative for anyone who wants to see or control the generated va
   `openssl rand` on the developer's machine aren't suitable for any shared environment
   (staging/production), where a real secrets manager (Vault/AWS Secrets Manager/Azure Key Vault,
   see Pendientes in the README) is still needed; this ADR doesn't change or weaken that need.
+
+## ADR-015: CI Type-Check Job + Enforced Coverage Floor
+
+**Status:** Accepted
+**Date:** 2026-09-20
+
+### Context and Problem
+
+`mypy --strict` was configured (ADR-004) and ran on `pre-commit`/`pre-push`, but ADR-007
+explicitly scoped `.github/workflows/ci.yml` to security/lint/format/test only and left mypy out
+of CI. A push with `--no-verify`, or from a machine without hooks installed, could reach `main`
+with zero type checking. Separately, `pytest-cov` (ADR-003) reported coverage on every run but had
+no `--cov-fail-under`, so a coverage regression would be visible in the report but would never
+fail a build, local or CI. Both gaps were named as open negatives in ADR-003 and ADR-007.
+
+### Chosen Option and Justification
+
+Added a `mypy` job to `ci.yml`, structured identically to the existing `lint`/`format` jobs
+(`actions/checkout@v4`, `astral-sh/setup-uv@v3` pinned to `env.UV_VERSION`, `uv sync --frozen`,
+then `uv run mypy app`), so a type error now fails a PR check regardless of whether the
+contributor has local hooks installed. Added `--cov-fail-under=85` to CI's `test` job invocation
+specifically (`uv run pytest --cov-fail-under=85` in `.github/workflows/ci.yml`), not to
+`[tool.pytest.ini_options].addopts` in `pyproject.toml` — `addopts` applies to every `pytest`
+invocation, and putting the flag there broke the documented single-test workflow (`uv run pytest
+tests/path/to/test_file.py::test_name`), which would fail the gate because coverage would be
+computed only over the narrow subset that one test exercises. Scoping the flag to the CI job
+keeps the full-suite/CI enforcement — a floor picked well below the current ~95% to allow normal
+fluctuation while still catching a real regression, not a re-tuning of what's measured — without
+breaking local single-test runs. Both changes close enforcement gaps rather than introduce new
+tooling: mypy and pytest-cov were already dev dependencies and already ran locally; this only
+makes both machine-enforced in CI too.
+
+### Trade-offs and Consequences
+
+- **Positive (+):** a type error or a coverage drop below 85% now fails CI even when local hooks
+  are bypassed or never installed, closing the exact gaps ADR-003 and ADR-007 named as negatives.
+  The `mypy` job mirrors the other jobs' structure exactly, so it's attributable at a glance in the
+  PR checks list like `lint`/`format`/`test` already are, and needed no new CI dependencies.
+- **Negative (-):** CI runtime grows by one more `uv sync --frozen` + job (no shared cache across
+  jobs), a fixed cost accepted for the enforcement gained. The 85% floor is a static number, not
+  auto-tightened as coverage grows — a slow drift from ~95% toward 85% would still pass CI; revisiting
+  the threshold periodically is a manual follow-up, not automated here.
