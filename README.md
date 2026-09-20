@@ -72,6 +72,9 @@ uv run pytest
 
 Tests run against an in-memory SQLite (aiosqlite) database per test, no Postgres required.
 
+Manual, opt-in e2e scripts that drive a real running stack over HTTP also exist under
+`scripts/e2e/` — not part of `uv run pytest` or CI, see `scripts/e2e/README.md`.
+
 ## API flow
 
 1. `GET /v1/health` — liveness check, no auth.
