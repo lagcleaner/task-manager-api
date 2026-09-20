@@ -652,3 +652,56 @@ just by inspecting route order in source.
   unfiltered by `deleted_at`, since the only path to it already 404s once the parent list is
   soft-deleted (`get_task_list` runs first); revisit if a direct invitation-listing path is ever
   added.
+
+## ADR-018: Partial Unique Index for Active Invitations
+
+**Status:** Accepted
+**Date:** 2026-09-20
+
+### Context and Problem
+
+ADR-017 added `deleted_at` (soft-delete) to `InvitationModel` but left the pre-existing
+`UniqueConstraint("list_id", "email")` unchanged. That constraint covers all rows, including
+soft-deleted ones, so cancelling or declining an invite and then re-inviting the same email to
+the same list hit `IntegrityError` — the soft-deleted row still occupied the `(list_id, email)`
+slot.
+
+### Chosen Option and Justification
+
+Replaced the table-wide `UniqueConstraint` with a Postgres partial unique index
+(`uq_invitations_list_id_email_active`) scoped to `WHERE deleted_at IS NULL`, via SQLAlchemy's
+`Index(..., unique=True, postgresql_where=sa.text("deleted_at IS NULL"))`. This enforces
+uniqueness only among live rows, which is the actual invariant the app needs, and requires only a
+`drop_constraint`/`create_index` migration pair rather than any application-level dedup logic.
+
+A follow-up audit found the service layer still blocked re-insertion: `NotificationService.
+send_task_list_invitation` calls `InvitationRepository.exists_for_list_and_email`, which counted
+*all* rows for `(list_id, email)`, including soft-deleted ones, and raised
+`DuplicateInvitationError` regardless of the DB-level fix. Scoped that query to
+`deleted_at IS NULL` too, so the duplicate check now matches the constraint's semantics.
+
+### Trade-offs and Consequences
+
+- **Positive (+):** at the DB level, inserting a new live row for a `(list_id, email)` pair whose
+  only prior row is soft-deleted no longer raises `IntegrityError`; two live invitations for the
+  same pair are still rejected. Migration applies, `\d invitations` shows the partial index with
+  its `WHERE` clause, downgrade restores the old table-wide constraint, and `alembic check`
+  reports no drift. At the service level, `InvitationRepository.exists_for_list_and_email` now
+  also filters `deleted_at IS NULL`, so `NotificationService.send_task_list_invitation` no longer
+  raises `DuplicateInvitationError` for an email whose only existing invitation on that list is
+  soft-deleted — verified via a service-level test that soft-deletes an invitation row directly
+  and re-invites the same email/list.
+- **Negative (-):** partial unique indexes are Postgres-specific — already true of this stack
+  (asyncpg, Postgres-only migrations), so no new portability cost. This same bug class (a unique
+  constraint not scoped to `deleted_at IS NULL`) could recur on any other soft-deletable unique
+  field added later; not audited or fixed here, since `UserModel.email` is the only other
+  `unique=True` field and it has no `deleted_at`. No per-invitation cancel/decline endpoint exists
+  yet anywhere in this codebase — the only invitation soft-delete path is
+  `InvitationRepository.soft_delete_by_list_id`, cascaded from `TaskListService.
+  soft_delete_task_list`, and that also sets the parent list's `deleted_at`, so
+  `send_task_list_invitation` 404s on the list lookup before ever reaching the duplicate check.
+  The scenario in the original bug report (re-invite after cancelling one invitation on a list
+  that stays active) is therefore not reachable via the API today; this fix is
+  preventive/correctness-focused, making the constraint and the duplicate-check semantics agree
+  with the soft-delete model from ADR-017, ready for whenever a per-invitation cancel/decline
+  endpoint is added.
