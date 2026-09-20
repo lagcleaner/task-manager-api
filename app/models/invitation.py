@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, UniqueConstraint, func
+import sqlalchemy as sa
+from sqlalchemy import ForeignKey, Index, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -13,7 +14,15 @@ if TYPE_CHECKING:
 
 class InvitationModel(Base):
     __tablename__ = "invitations"
-    __table_args__ = (UniqueConstraint("list_id", "email", name="uq_invitations_list_id_email"),)
+    __table_args__ = (
+        Index(
+            "uq_invitations_list_id_email_active",
+            "list_id",
+            "email",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     list_id: Mapped[int] = mapped_column(ForeignKey("task_lists.id"), nullable=False)
