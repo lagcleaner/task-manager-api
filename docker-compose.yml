@@ -29,10 +29,13 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      # Entrypoint starts as root and drops privileges to the `postgres`
-      # user via setuid/setgid before starting the server.
+      # Entrypoint starts as root and needs these to chown/chmod a fresh
+      # (root-owned) volume before dropping privileges to `postgres`.
       - SETUID
       - SETGID
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
 
   redis:
     image: redis:7-alpine

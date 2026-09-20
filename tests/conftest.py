@@ -10,6 +10,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 import pytest
 from fakeredis import FakeAsyncRedis
 from httpx import ASGITransport, AsyncClient
+from limits.storage import MemoryStorage
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -21,11 +22,15 @@ from app.main import app  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter() -> None:
-    # The limiter's in-memory storage is a module-level singleton shared by
-    # every test in the process; without a reset, tests exercising
-    # /v1/auth/* would trip each other's rate limit instead of the intended
-    # per-test behavior. Rate limiting itself is covered by a dedicated test.
-    limiter.reset()
+    # Production `limiter` is Redis-backed (see app/core/rate_limit.py) so
+    # counts are shared across replicas, but tests don't run against a live
+    # Redis. Swap in a fresh in-memory backend per test instead of calling
+    # `.reset()` (which would issue real Redis commands) — same per-test
+    # isolation, no live infra required. Rate limiting itself is covered by a
+    # dedicated test; Redis wiring is covered by tests/core/test_rate_limit.py.
+    fresh_storage = MemoryStorage()
+    limiter._storage = fresh_storage
+    limiter._limiter.storage = fresh_storage
 
 
 @pytest.fixture
