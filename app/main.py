@@ -142,9 +142,7 @@ async def authorization_error_handler(request: Request, exc: AuthorizationError)
 
 @app.exception_handler(DomainError)
 async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
-    # Catch-all for any domain error without a dedicated handler above: still a 4xx-shaped
-    # generic message, never str(exc) verbatim, so a future exception subclass can't
-    # accidentally leak internal details just by being raised.
+    # Catch-all for domain exceptions with no dedicated handler; never leak str(exc).
     logger.warning("Unhandled domain error: %s", type(exc).__name__)
     return JSONResponse(
         _error("bad_request", "Request could not be processed"),
@@ -154,8 +152,9 @@ async def domain_error_handler(request: Request, exc: DomainError) -> JSONRespon
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    request_id = getattr(request.state, "request_id", "unknown")
-    logger.exception("Unhandled exception for request_id=%s", request_id)
+    # Runs outside request_id_middleware's scope, after its contextvar reset — read
+    # request.state.request_id directly instead, it isn't reset.
+    logger.exception("Unhandled exception", extra={"request_id": request.state.request_id})
     return JSONResponse(
         _error("internal_server_error", "An unexpected error occurred"),
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
