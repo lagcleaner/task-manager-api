@@ -16,10 +16,15 @@ class InvitationRepository:
         return invitation
 
     async def exists_for_list_and_email(self, list_id: int, email: str) -> bool:
+        """Only live (non soft-deleted) invitations count as a duplicate."""
         result = await self._session.execute(
             select(func.count())
             .select_from(InvitationModel)
-            .where(InvitationModel.list_id == list_id, InvitationModel.email == email)
+            .where(
+                InvitationModel.list_id == list_id,
+                InvitationModel.email == email,
+                InvitationModel.deleted_at.is_(None),
+            )
         )
         return result.scalar_one() > 0
 

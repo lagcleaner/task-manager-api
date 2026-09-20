@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task_list import TaskListModel
 from app.models.user import UserModel, UserRole
+from app.repositories.invitation_repository import InvitationRepository
 from app.services.exceptions import DuplicateInvitationError, TaskListNotFoundError
 from app.services.notification_service import NotificationService
 
@@ -82,3 +83,36 @@ async def test_list_invitations_raises_when_list_missing(db_session: AsyncSessio
 
     with pytest.raises(TaskListNotFoundError):
         await service.list_invitations(999)
+
+
+async def test_send_task_list_invitation_succeeds_after_invitation_soft_deleted(
+    db_session: AsyncSession,
+) -> None:
+    """ADR-018 regression: the duplicate check must only count live invitations, so
+    re-inviting the same email/list after the prior invitation row was soft-deleted
+    succeeds instead of raising DuplicateInvitationError."""
+    owner = await _create_user(db_session, "owner4@example.com")
+    task_list = await _create_task_list(db_session, owner.id)
+    service = NotificationService(db_session)
+    first_invitation = await service.send_task_list_invitation(
+        task_list.id, "invitee@example.com", invited_by_id=owner.id
+    )
+
+    # Soft-delete the invitation row directly rather than the parent list: today the
+    # only real soft-delete path cascades from TaskListService.soft_delete_task_list,
+    # which also soft-deletes the list itself and would 404 before reaching the
+    # duplicate check. No per-invitation cancel/decline endpoint exists yet, so this
+    # isolates what's testable at this layer.
+    invitation_repository = InvitationRepository(db_session)
+    await invitation_repository.soft_delete_by_list_id(task_list.id)
+    await db_session.commit()
+    await db_session.refresh(first_invitation)
+    assert first_invitation.deleted_at is not None
+
+    second_invitation = await service.send_task_list_invitation(
+        task_list.id, "invitee@example.com", invited_by_id=owner.id
+    )
+
+    assert second_invitation.id is not None
+    assert second_invitation.id != first_invitation.id
+    assert second_invitation.deleted_at is None
