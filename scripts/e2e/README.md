@@ -60,10 +60,13 @@ docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   verified) -> logout -> access token rejected after logout, plus a duplicate-registration
   failure path. Stays comfortably under the `10/minute` `rate_limit_auth` budget.
 - `test_tasks_flow.py` — create task list -> create/list/get/update/change-status/assign
-  task -> owner soft-deletes task -> verify 404.
+  task -> owner soft-deletes task -> verify 404 -> (admin) sees it in
+  `GET /v1/tasks/deleted` -> admin hard-deletes via `/permanent` -> gone from the listing.
 - `test_task_lists_flow.py` — create/list/get/update task list -> list its tasks filtered by
   status and priority -> owner soft-deletes list -> verify 404 -> (admin) sees it in
-  `GET /v1/task-lists/deleted` -> admin hard-deletes via `/permanent`.
+  `GET /v1/task-lists/deleted`, confirms cascade soft-deleted its two tasks
+  (`GET /v1/tasks/deleted`) -> admin hard-deletes list via `/permanent` -> confirms cascade
+  hard-deleted the tasks too.
 - `test_invitations_flow.py` — create task list -> invite a unique email -> list invitations
   -> verify it appears.
 

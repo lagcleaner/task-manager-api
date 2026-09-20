@@ -1,7 +1,9 @@
 """Manual e2e flow: create task list -> list task lists -> get task list -> update
 task list -> list its tasks with status/priority filters -> owner soft-deletes the list
--> verify 404 -> (if admin available) admin sees it in GET /v1/task-lists/deleted and
-hard-deletes it via DELETE /v1/task-lists/{id}/permanent.
+-> verify 404 -> (if admin available) admin sees it in GET /v1/task-lists/deleted,
+confirms the cascade soft-deleted its two tasks too (GET /v1/tasks/deleted), hard-deletes
+the list via DELETE /v1/task-lists/{id}/permanent, and confirms the cascade hard-deleted
+its tasks too.
 
 Run: uv run pytest scripts/e2e/test_task_lists_flow.py --no-cov (requires a live stack,
 see README.md).
@@ -113,16 +115,28 @@ async def test_create_list_update_filter_tasks_delete_flow(
         assert deleted_response.status_code == 200
         assert any(item["id"] == list_id for item in deleted_response.json())
 
-        # admin permanently hard-deletes it
+        # cascade: soft-deleting the list also soft-deleted its two tasks
+        deleted_tasks_response = await client.get("/v1/tasks/deleted", headers=admin_headers)
+        assert deleted_tasks_response.status_code == 200
+        deleted_task_ids = {item["id"] for item in deleted_tasks_response.json()}
+        assert {high_priority_id, low_priority_id} <= deleted_task_ids
+
+        # admin permanently hard-deletes the list
         permanent_response = await client.delete(
             f"/v1/task-lists/{list_id}/permanent", headers=admin_headers
         )
         assert permanent_response.status_code == 204
 
-        # gone from the deleted-listing too, now that it's hard-deleted
+        # gone from the list's deleted-listing too, now that it's hard-deleted
         deleted_after_response = await client.get("/v1/task-lists/deleted", headers=admin_headers)
         assert deleted_after_response.status_code == 200
         assert not any(item["id"] == list_id for item in deleted_after_response.json())
+
+        # cascade hard-delete: its tasks are gone from the tasks' deleted-listing too
+        deleted_tasks_after_response = await client.get("/v1/tasks/deleted", headers=admin_headers)
+        assert deleted_tasks_after_response.status_code == 200
+        deleted_task_ids_after = {item["id"] for item in deleted_tasks_after_response.json()}
+        assert not ({high_priority_id, low_priority_id} & deleted_task_ids_after)
     finally:
         if admin_headers is not None:
             # Best-effort: no-op (404) if the try block already hard-deleted it, so reruns

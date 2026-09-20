@@ -1,15 +1,17 @@
 """Manual e2e flow: create task list -> create task -> list tasks -> get task ->
 update task -> change status -> assign task -> owner soft-deletes the task -> verify
-404. Cleans up the task list it created (which cascade-soft-deletes any task still
-on it; hard-deleted for real if an admin account is available).
+404 -> (if admin available) admin sees it in GET /v1/tasks/deleted and hard-deletes it
+via DELETE /v1/tasks/{id}/permanent. Cleans up the task list it created.
 
 Run: uv run pytest scripts/e2e/test_tasks_flow.py --no-cov (requires a live stack, see README.md).
 
 DELETE /v1/tasks/{id} is self-service soft-delete, owner-only (resolved through the
-task's parent list) — no admin needed. Real cleanup of the task list (hard-delete via
-DELETE /v1/task-lists/{id}/permanent) needs E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD set to a
+task's parent list) — no admin needed. The admin-only tail (deleted-listing + permanent
+hard-delete) and the real cleanup of the task list (hard-delete via
+DELETE /v1/task-lists/{id}/permanent) need E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD set to a
 pre-provisioned admin account; without them this flow still exercises everything else,
-and cleanup falls back to soft-deleting the list instead of failing.
+only that tail is skipped, and cleanup falls back to soft-deleting the list instead of
+failing.
 
 Uses the shared `actor` fixture (conftest.py) instead of registering its own user — see
 that fixture's docstring for why.
@@ -17,6 +19,7 @@ that fixture's docstring for why.
 
 from collections.abc import Callable
 
+import pytest
 from httpx import AsyncClient
 
 
@@ -86,6 +89,30 @@ async def test_create_list_use_update_assign_delete_task_flow(
         # verify 404 after soft-delete
         after_delete_response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
         assert after_delete_response.status_code == 404
+
+        if admin_headers is None:
+            pytest.skip(
+                "E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD not set: GET /v1/tasks/deleted and "
+                "DELETE /v1/tasks/{id}/permanent require the admin role, which this API "
+                "has no self-service way to grant. See scripts/e2e/README.md. The "
+                "soft-deleted task is left behind (already invisible to non-admin callers)."
+            )
+
+        # admin sees the soft-deleted task
+        deleted_response = await client.get("/v1/tasks/deleted", headers=admin_headers)
+        assert deleted_response.status_code == 200
+        assert any(item["id"] == task_id for item in deleted_response.json())
+
+        # admin permanently hard-deletes it
+        permanent_response = await client.delete(
+            f"/v1/tasks/{task_id}/permanent", headers=admin_headers
+        )
+        assert permanent_response.status_code == 204
+
+        # gone from the deleted-listing too, now that it's hard-deleted
+        deleted_after_response = await client.get("/v1/tasks/deleted", headers=admin_headers)
+        assert deleted_after_response.status_code == 200
+        assert not any(item["id"] == task_id for item in deleted_after_response.json())
     finally:
         if admin_headers is not None:
             # Real cleanup: hard-delete the task list (and any remaining child rows).
