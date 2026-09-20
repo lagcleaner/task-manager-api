@@ -154,8 +154,12 @@ async def domain_error_handler(request: Request, exc: DomainError) -> JSONRespon
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    request_id = getattr(request.state, "request_id", "unknown")
-    logger.exception("Unhandled exception for request_id=%s", request_id)
+    # This handler runs outside request_id_middleware's call_next scope (Starlette's
+    # ServerErrorMiddleware sits above all app.middleware("http") layers), so by the time
+    # we get here the request_id contextvar has already been reset in that middleware's
+    # `finally`. request.state.request_id is an attribute on the Request itself, set before
+    # call_next, so it survives — pass it explicitly rather than relying on the contextvar.
+    logger.exception("Unhandled exception", extra={"request_id": request.state.request_id})
     return JSONResponse(
         _error("internal_server_error", "An unexpected error occurred"),
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

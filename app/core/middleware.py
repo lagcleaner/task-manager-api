@@ -1,10 +1,17 @@
 import uuid
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 
 from starlette.requests import Request
 from starlette.responses import Response
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+_request_id_ctx_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+
+
+def get_request_id() -> str | None:
+    return _request_id_ctx_var.get()
 
 
 async def request_id_middleware(
@@ -14,7 +21,11 @@ async def request_id_middleware(
     # be used to inject arbitrary content into logs correlated by this header.
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
-    response = await call_next(request)
+    token = _request_id_ctx_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        _request_id_ctx_var.reset(token)
     response.headers[REQUEST_ID_HEADER] = request_id
     return response
 
