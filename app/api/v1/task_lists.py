@@ -44,6 +44,28 @@ async def list_task_lists(
 
 
 @router.get(
+    "/deleted",
+    response_model=list[TaskListRead],
+    status_code=status.HTTP_200_OK,
+    summary="List soft-deleted task lists",
+    description="Requires the admin role. Registered before `/{list_id}` so the literal "
+    "`deleted` segment isn't shadowed by the variable path.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+    },
+)
+async def list_deleted_task_lists(
+    service: TaskListServiceDep,
+    _admin: AdminUser,
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    limit: int = Query(default=100, ge=1, le=500, description="Page size"),
+) -> list[TaskListRead]:
+    task_lists = await service.list_deleted_task_lists(offset=offset, limit=limit)
+    return [TaskListRead.model_validate(task_list) for task_list in task_lists]
+
+
+@router.get(
     "/{list_id}",
     response_model=TaskListRead,
     status_code=status.HTTP_200_OK,
@@ -86,7 +108,8 @@ async def update_task_list(
     "/{list_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a task list",
-    description="Requires the admin role.",
+    description="Soft-deletes the task list (`deleted_at` is set, no row is removed) and "
+    "cascades to its tasks and invitations. Only the list's owner may delete it.",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
@@ -95,10 +118,31 @@ async def update_task_list(
 )
 async def delete_task_list(
     service: TaskListServiceDep,
+    user: CurrentUser,
+    list_id: int = Path(..., ge=1, description="Task list identifier"),
+) -> None:
+    await service.soft_delete_task_list(list_id, user)
+
+
+@router.delete(
+    "/{list_id}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a task list",
+    description="Requires the admin role. Issues a real SQL DELETE (cascading to tasks and "
+    "invitations), bypassing the soft-delete filter — works on both active and already "
+    "soft-deleted task lists.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def permanent_delete_task_list(
+    service: TaskListServiceDep,
     _admin: AdminUser,
     list_id: int = Path(..., ge=1, description="Task list identifier"),
 ) -> None:
-    await service.delete_task_list(list_id)
+    await service.permanent_delete_task_list(list_id)
 
 
 @router.get(

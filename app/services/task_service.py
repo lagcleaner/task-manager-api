@@ -1,11 +1,17 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import TaskModel, TaskStatus
+from app.models.user import UserModel
 from app.repositories.task_list_repository import TaskListRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.task import TaskCreate, TaskUpdate
-from app.services.exceptions import TaskListNotFoundError, TaskNotFoundError, UserNotFoundError
+from app.services.exceptions import (
+    NotOwnerError,
+    TaskListNotFoundError,
+    TaskNotFoundError,
+    UserNotFoundError,
+)
 
 
 class TaskService:
@@ -21,7 +27,10 @@ class TaskService:
             raise UserNotFoundError(user_id)
 
     async def create_task(self, data: TaskCreate) -> TaskModel:
-        task_list = await self._task_list_repository.get_by_id(data.list_id)
+        # Locked read: serializes against TaskListService.soft_delete_task_list's cascade —
+        # without this lock a plain SELECT would read the pre-delete row under READ COMMITTED
+        # and insert a task under a list whose soft-delete is mid-flight.
+        task_list = await self._task_list_repository.get_by_id(data.list_id, for_update=True)
         if task_list is None:
             raise TaskListNotFoundError(data.list_id)
         if data.assignee_id is not None:
@@ -45,6 +54,9 @@ class TaskService:
 
     async def list_tasks(self, *, offset: int = 0, limit: int = 100) -> list[TaskModel]:
         return await self._repository.list_all(offset=offset, limit=limit)
+
+    async def list_deleted_tasks(self, *, offset: int = 0, limit: int = 100) -> list[TaskModel]:
+        return await self._repository.list_deleted(offset=offset, limit=limit)
 
     async def update_task(self, task_id: int, data: TaskUpdate) -> TaskModel:
         task = await self.get_task(task_id)
@@ -73,7 +85,19 @@ class TaskService:
         await self._session.refresh(task)
         return task
 
-    async def delete_task(self, task_id: int) -> None:
+    async def soft_delete_task(self, task_id: int, current_user: UserModel) -> None:
         task = await self.get_task(task_id)
+        # Tasks have no owner field of their own; ownership resolves via the parent list.
+        if task.task_list.owner_id != current_user.id:
+            raise NotOwnerError("task", task_id, current_user.id)
+        await self._repository.soft_delete(task)
+        await self._session.commit()
+
+    async def permanent_delete_task(self, task_id: int) -> None:
+        # Bypasses the deleted_at IS NULL default filter: admin can hard-delete an
+        # active or already soft-deleted task.
+        task = await self._repository.get_by_id_any(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
         await self._repository.delete(task)
         await self._session.commit()

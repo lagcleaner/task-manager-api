@@ -40,6 +40,28 @@ async def list_tasks(
 
 
 @router.get(
+    "/deleted",
+    response_model=list[TaskRead],
+    status_code=status.HTTP_200_OK,
+    summary="List soft-deleted tasks",
+    description="Requires the admin role. Registered before `/{task_id}` so the literal "
+    "`deleted` segment isn't shadowed by the variable path.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+    },
+)
+async def list_deleted_tasks(
+    service: TaskServiceDep,
+    _admin: AdminUser,
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    limit: int = Query(default=100, ge=1, le=500, description="Page size"),
+) -> list[TaskRead]:
+    tasks = await service.list_deleted_tasks(offset=offset, limit=limit)
+    return [TaskRead.model_validate(task) for task in tasks]
+
+
+@router.get(
     "/{task_id}",
     response_model=TaskRead,
     status_code=status.HTTP_200_OK,
@@ -123,7 +145,8 @@ async def assign_task(
     "/{task_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a task",
-    description="Requires the admin role.",
+    description="Soft-deletes the task (`deleted_at` is set, no row is removed). Only the "
+    "owning task list's owner may delete a task.",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
@@ -132,7 +155,27 @@ async def assign_task(
 )
 async def delete_task(
     service: TaskServiceDep,
+    user: CurrentUser,
+    task_id: int = Path(..., ge=1, description="Task identifier"),
+) -> None:
+    await service.soft_delete_task(task_id, user)
+
+
+@router.delete(
+    "/{task_id}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a task",
+    description="Requires the admin role. Issues a real SQL DELETE, bypassing the soft-delete "
+    "filter — works on both active and already soft-deleted tasks.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
+        status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+    },
+)
+async def permanent_delete_task(
+    service: TaskServiceDep,
     _admin: AdminUser,
     task_id: int = Path(..., ge=1, description="Task identifier"),
 ) -> None:
-    await service.delete_task(task_id)
+    await service.permanent_delete_task(task_id)
